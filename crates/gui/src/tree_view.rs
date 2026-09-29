@@ -8,6 +8,11 @@ use crate::palette::{self, Colors};
 
 const ROW_HEIGHT: f32 = 20.0;
 const INDENT: f32 = 16.0;
+const MIN_NAME_WIDTH: f32 = 150.0;
+/// Starting widths of size proportion, percent, size, and cost.
+const NUMBER_COLUMNS: [f32; 4] = [110.0, 70.0, 90.0, 100.0];
+/// Objects is last and fills the leftover width, but starts about this wide.
+const OBJECTS_WIDTH: f32 = 90.0;
 
 /// The folder list: one row per visible node, children sorted largest first.
 #[derive(Default)]
@@ -64,24 +69,27 @@ impl TreeView {
             .take()
             .and_then(|target| self.rows.iter().position(|row| row.id == target));
 
+        // Name starts with whatever the number columns leave over; after that every
+        // column keeps the width the user gives it, and the last column absorbs the
+        // difference, so dragging a divider only moves columns to its right.
+        let spacing = ui.spacing().item_spacing.x * (NUMBER_COLUMNS.len() + 1) as f32;
+        let others: f32 = NUMBER_COLUMNS.iter().sum::<f32>() + OBJECTS_WIDTH + spacing;
+        let name_width = (ui.available_width() - others).max(MIN_NAME_WIDTH);
+
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .sense(Sense::click())
             .cell_layout(egui::Layout::left_to_right(Align::Center))
             .resizable(true)
-            // Name takes whatever width is left, re-fitted every frame, so the other
-            // columns stay visible when the panels around the list change size.
             .column(
-                Column::remainder()
-                    .at_least(200.0)
-                    .clip(true)
-                    .resizable(false),
-            )
-            .column(Column::initial(110.0).at_least(40.0).clip(true))
-            .column(Column::initial(70.0).at_least(40.0).clip(true))
-            .column(Column::initial(90.0).at_least(40.0).clip(true))
-            .column(Column::initial(100.0).at_least(40.0).clip(true))
-            .column(Column::initial(90.0).at_least(40.0).clip(true));
+                Column::initial(name_width)
+                    .at_least(MIN_NAME_WIDTH)
+                    .clip(true),
+            );
+        for width in NUMBER_COLUMNS {
+            table = table.column(Column::initial(width).at_least(40.0).clip(true));
+        }
+        table = table.column(Column::remainder().at_least(60.0).clip(true));
         if let Some(row) = scroll_row {
             table = table.scroll_to_row(row, Some(Align::Center));
         }

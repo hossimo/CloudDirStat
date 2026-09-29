@@ -3,6 +3,8 @@
 mod app;
 mod credentials_form;
 mod cushion;
+#[cfg(feature = "demo")]
+mod demo_scan;
 mod help;
 mod legend;
 mod palette;

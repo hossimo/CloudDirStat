@@ -181,8 +181,8 @@ fn table(
             .column(Column::initial(170.0).at_least(60.0).clip(true))
             .column(Column::initial(80.0).at_least(40.0).clip(true))
             .column(Column::initial(60.0).at_least(40.0).clip(true))
-            .column(Column::initial(80.0).at_least(40.0).clip(true))
-            .column(Column::remainder().at_least(40.0).clip(true))
+            .column(Column::initial(90.0).at_least(40.0).clip(true))
+            .column(Column::remainder().at_least(50.0).clip(true))
             .header(ROW_HEIGHT, |mut header| {
                 for heading in [title, "Size", "Percent", "Cost/mo", "Objects"] {
                     header.col(|ui| {

@@ -2,19 +2,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{Entry, NodeId, NodeKind, Tree};
-use clouddirstat_providers::s3::{
-    CredentialSource, S3Location, S3Pricing, S3Scanner, ScanOptions, ScanStats,
-};
+use clouddirstat_providers::s3::{CredentialSource, S3Location, S3Pricing, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 
-const CONCURRENCY: usize = 32;
-
 #[derive(Clone)]
 pub struct ScanRequest {
     pub location: S3Location,
+    // Demo builds scan made-up data and need no credentials.
+    #[cfg_attr(feature = "demo", allow(dead_code))]
     pub credentials: CredentialSource,
     pub include_versions: bool,
 }
@@ -168,11 +166,18 @@ impl Scan {
     }
 }
 
+#[cfg(feature = "demo")]
+use crate::demo_scan::run;
+
+#[cfg(not(feature = "demo"))]
 async fn run(
     request: &ScanRequest,
     pricing: oneshot::Sender<Arc<S3Pricing>>,
     sender: mpsc::Sender<Vec<Entry>>,
 ) -> clouddirstat_providers::Result<ScanStats> {
+    use clouddirstat_providers::s3::{S3Scanner, ScanOptions};
+    const CONCURRENCY: usize = 32;
+
     let scanner = S3Scanner::connect(&request.location, &request.credentials, None).await?;
     let _ = pricing.send(Arc::new(scanner.pricing()));
     let options = ScanOptions {

@@ -18,6 +18,7 @@ const INSERT_BUDGET: Duration = Duration::from_millis(8);
 const SCANNING_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
 /// While a scan is adding entries, re-sort the views at most this often.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const LEGEND_WIDTH: f32 = 520.0;
 
 pub struct App {
     runtime: Runtime,
@@ -273,10 +274,12 @@ impl eframe::App for App {
         let root = scan.root();
 
         if !scan.is_running() {
-            let height = ui.available_height() * 0.55;
+            let available = ui.available_height();
             egui::Panel::bottom("treemap")
                 .resizable(true)
-                .default_size(height)
+                .default_size(available * 0.55)
+                // Always leave a few rows of the folder list visible.
+                .max_size(available * 0.8)
                 .show(ui, |ui| {
                     if let Some(clicked) = view.treemap.show(ui, tree, root, colors, view.selected)
                     {
@@ -289,7 +292,9 @@ impl eframe::App for App {
         let mut color_mode = view.color_mode;
         egui::Panel::right("legend")
             .resizable(true)
-            .default_size(340.0)
+            // Wide enough for the legend tables, so the panel doesn't grow on its
+            // first frames and push the folder list's last columns out of view.
+            .default_size(LEGEND_WIDTH)
             .show(ui, |ui| {
                 let clicked = legend::show(
                     ui,

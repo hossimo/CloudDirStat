@@ -1,3 +1,6 @@
+mod arena;
+#[cfg(feature = "demo")]
+pub mod demo;
 mod format;
 mod tree;
 mod treemap;

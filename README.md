@@ -15,6 +15,10 @@ CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and sh
 
 > **Status:** early development. The command-line scanner for AWS S3 works, and a first treemap GUI is in progress. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
 
+![CloudDirStat scanning six demo buckets: folder list, file types legend, and treemap colored by file type](screenshots/demo-1.png)
+
+*Scan of made-up demo buckets (see [Demo data](#demo-data-for-screenshots)).*
+
 ## Usage
 
 ```sh
@@ -175,7 +179,21 @@ cargo fmt --all
 | `crates/cli` | The `clouddirstat` command-line tool. |
 | `crates/gui` | The `clouddirstat-gui` treemap app (egui). |
 
-Scanners stream objects in batches over a channel, and the tree is built while the scan is still running. This is what will let the GUI draw while a scan is in progress. To keep memory low on big buckets, the tree stores each path segment only once and does not keep full object keys.
+Scanners stream objects in batches over a channel, and the tree is built while the scan is still running, which lets the GUI draw while a scan is in progress. To keep memory low on big buckets, each object is a 48-byte node plus its name, stored in fixed-size blocks: about 66 bytes per object (roughly 650 MB per 10 million objects), and full object keys are never kept. Measure it with:
+
+```sh
+cargo run --release -p clouddirstat-core --features demo --example memory -- 10000000
+```
+
+### Demo data (for screenshots)
+
+Build the GUI with the `demo` feature to scan made-up buckets instead of AWS, so screenshots never show real data. Release builds never include it.
+
+```sh
+cargo run --release -p clouddirstat-gui --features demo -- s3://
+```
+
+`s3://` shows six fictional `acme-*` buckets in different regions; `s3://acme-backups/` (or any demo bucket name) shows one. Check **Versions** for noncurrent versions and delete markers. The data is generated from a fixed seed, so it looks the same every time; set `CLOUDDIRSTAT_DEMO_OBJECTS` for more or fewer objects (default 120,000).
 
 ## Troubleshooting
 

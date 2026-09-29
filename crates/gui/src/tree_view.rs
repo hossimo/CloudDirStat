@@ -69,12 +69,19 @@ impl TreeView {
             .sense(Sense::click())
             .cell_layout(egui::Layout::left_to_right(Align::Center))
             .resizable(true)
-            .column(Column::remainder().at_least(200.0).clip(true))
+            // Name takes whatever width is left, re-fitted every frame, so the other
+            // columns stay visible when the panels around the list change size.
+            .column(
+                Column::remainder()
+                    .at_least(200.0)
+                    .clip(true)
+                    .resizable(false),
+            )
             .column(Column::initial(110.0).at_least(40.0).clip(true))
             .column(Column::initial(70.0).at_least(40.0).clip(true))
             .column(Column::initial(90.0).at_least(40.0).clip(true))
-            .column(Column::initial(90.0).at_least(40.0).clip(true))
-            .column(Column::initial(100.0).at_least(40.0).clip(true));
+            .column(Column::initial(100.0).at_least(40.0).clip(true))
+            .column(Column::initial(90.0).at_least(40.0).clip(true));
         if let Some(row) = scroll_row {
             table = table.scroll_to_row(row, Some(Align::Center));
         }
@@ -149,7 +156,7 @@ impl TreeView {
     /// Draws the expand/collapse arrow; returns whether it was clicked.
     fn expander(&self, ui: &mut egui::Ui, tree: &Tree, id: NodeId) -> bool {
         let size = egui::vec2(INDENT, INDENT);
-        if tree.node(id).children().is_empty() {
+        if !tree.node(id).has_children() {
             ui.add_space(size.x + ui.spacing().item_spacing.x);
             return false;
         }

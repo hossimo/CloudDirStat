@@ -51,6 +51,16 @@ impl Report<'_> {
             self.pricing.region_label(),
             S3Pricing::published()
         );
+
+        let uploads = self.tree.usage_by_kind(EntryKind::IncompleteUpload);
+        if uploads.objects > 0 {
+            println!(
+                "Incomplete multipart uploads: {} in {} uploads (~{}/month), not shown by normal listings",
+                format_bytes(uploads.bytes),
+                format_count(uploads.objects),
+                format_usd(uploads.monthly_cost)
+            );
+        }
     }
 
     fn print_storage_classes(&self) {

@@ -23,6 +23,8 @@ pub struct DemoBucket {
     /// Percent of objects with older versions, and percent deleted with versions left.
     versioned_percent: u32,
     deleted_percent: u32,
+    /// Per mille of objects that are abandoned multipart uploads instead.
+    abandoned_uploads_per_mille: u32,
 }
 
 pub const BUCKETS: &[DemoBucket] = &[
@@ -65,6 +67,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         ],
         versioned_percent: 3,
         deleted_percent: 1,
+        abandoned_uploads_per_mille: 12,
     },
     DemoBucket {
         name: "acme-app-logs",
@@ -83,6 +86,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         storage_classes: &[("STANDARD", 45), ("STANDARD_IA", 30), ("GLACIER_IR", 25)],
         versioned_percent: 0,
         deleted_percent: 0,
+        abandoned_uploads_per_mille: 0,
     },
     DemoBucket {
         name: "acme-backups",
@@ -113,6 +117,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         ],
         versioned_percent: 45,
         deleted_percent: 8,
+        abandoned_uploads_per_mille: 25,
     },
     DemoBucket {
         name: "acme-web-assets",
@@ -135,6 +140,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         storage_classes: &[("STANDARD", 65), ("INTELLIGENT_TIERING", 35)],
         versioned_percent: 20,
         deleted_percent: 5,
+        abandoned_uploads_per_mille: 1,
     },
     DemoBucket {
         name: "acme-data-lake",
@@ -163,6 +169,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         ],
         versioned_percent: 5,
         deleted_percent: 2,
+        abandoned_uploads_per_mille: 4,
     },
     DemoBucket {
         name: "acme-user-uploads",
@@ -182,6 +189,7 @@ pub const BUCKETS: &[DemoBucket] = &[
         storage_classes: &[("STANDARD", 60), ("ONEZONE_IA", 25), ("STANDARD_IA", 15)],
         versioned_percent: 10,
         deleted_percent: 6,
+        abandoned_uploads_per_mille: 3,
     },
 ];
 
@@ -244,6 +252,12 @@ impl DemoBucket {
             storage_class: class.to_owned(),
             kind,
         };
+
+        if (rng.below(1000) as u32) < self.abandoned_uploads_per_mille {
+            let uploaded = size / 100 * (10 + rng.below(80));
+            out.push(entry(uploaded, EntryKind::IncompleteUpload));
+            return;
+        }
 
         let roll = rng.below(100) as u32;
         let deleted = with_versions && roll < self.deleted_percent;
@@ -363,12 +377,30 @@ mod tests {
     }
 
     #[test]
+    fn includes_some_abandoned_uploads() {
+        let entries: Vec<_> = bucket("acme-backups")
+            .unwrap()
+            .entries(2_000, false, 5)
+            .collect();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.kind == EntryKind::IncompleteUpload)
+        );
+    }
+
+    #[test]
     fn versions_only_when_asked() {
         let without: Vec<_> = bucket("acme-backups")
             .unwrap()
             .entries(300, false, 3)
             .collect();
-        assert!(without.iter().all(|entry| entry.kind == EntryKind::Current));
+        assert!(
+            without.iter().all(|entry| matches!(
+                entry.kind,
+                EntryKind::Current | EntryKind::IncompleteUpload
+            ))
+        );
 
         let with: Vec<_> = bucket("acme-backups")
             .unwrap()

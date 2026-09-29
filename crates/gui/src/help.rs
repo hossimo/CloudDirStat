@@ -86,6 +86,16 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
             ui.label("Noncurrent versions and delete markers");
             ui.end_row();
 
+            ui.monospace("s3:ListBucketMultipartUploads");
+            ui.label("Optional");
+            ui.label("Finding incomplete multipart uploads (billed but hidden)");
+            ui.end_row();
+
+            ui.monospace("s3:ListMultipartUploadParts");
+            ui.label("Optional");
+            ui.label("Sizing incomplete uploads (resource: bucket/*)");
+            ui.end_row();
+
             ui.monospace("s3:ListAllMyBuckets");
             ui.label("For s3://");
             ui.label("Finding every bucket to scan them all at once");
@@ -107,9 +117,9 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
             .interactive(false),
     );
     ui.weak(
-        "Drop the statements you don't need: the second is only for Versions, the third \
-         only for scanning all buckets (s3://). To scan all buckets, set the bucket \
-         resources to arn:aws:s3:::* or list each bucket.",
+        "Statements whose Sid ends in Optional can be dropped: without them, that \
+         feature is skipped with a warning. To scan all buckets (s3://), set the bucket \
+         resources to arn:aws:s3:::* (and arn:aws:s3:::*/*) or list each bucket.",
     );
 
     ui.add_space(12.0);

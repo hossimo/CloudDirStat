@@ -11,3 +11,7 @@ license = "MIT OR Apache-2.0"
 lto = true
 codegen-units = 1
 strip = true
+
+# Dependencies (AWS SDK, egui) are optimized for size; our own crates stay at full speed.
+[profile.release.package."*"]
+opt-level = "s"

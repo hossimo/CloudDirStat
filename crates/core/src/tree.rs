@@ -22,6 +22,9 @@ pub enum NodeKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct NameId(u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClassId(u16);
+
 #[derive(Debug)]
 pub struct Node {
     name: NameId,
@@ -29,6 +32,7 @@ pub struct Node {
     parent: Option<NodeId>,
     children: Vec<NodeId>,
     usage: Usage,
+    storage_class: Option<ClassId>,
 }
 
 impl Node {
@@ -84,6 +88,7 @@ impl Tree {
             parent: None,
             children: Vec::new(),
             usage: Usage::default(),
+            storage_class: None,
         });
         tree
     }
@@ -112,7 +117,13 @@ impl Tree {
             self.nodes[current.index()].usage += usage;
         }
 
-        self.add_storage_class_usage(&entry.storage_class, usage);
+        let class = self.add_storage_class_usage(&entry.storage_class, usage);
+        let node = &mut self.nodes[current.index()];
+        if node.kind == NodeKind::Object
+            && (entry.kind == EntryKind::Current || node.storage_class.is_none())
+        {
+            node.storage_class = Some(class);
+        }
         self.kinds[entry.kind as usize] += usage;
     }
 
@@ -138,6 +149,13 @@ impl Tree {
             path.push('/');
         }
         path
+    }
+
+    /// The storage class of an object's current version (or of any version when
+    /// there is no current one). `None` for directories.
+    pub fn storage_class(&self, id: NodeId) -> Option<&str> {
+        let class = self.node(id).storage_class?;
+        Some(&self.storage_classes[usize::from(class.0)].0)
     }
 
     pub fn total(&self) -> Usage {
@@ -196,6 +214,7 @@ impl Tree {
             parent: Some(parent),
             children: Vec::new(),
             usage: Usage::default(),
+            storage_class: None,
         });
         self.nodes[parent.index()].children.push(id);
         self.children_by_name.insert((parent, name, kind), id);
@@ -214,15 +233,21 @@ impl Tree {
         id
     }
 
-    fn add_storage_class_usage(&mut self, class: &str, usage: Usage) {
-        match self
+    fn add_storage_class_usage(&mut self, class: &str, usage: Usage) -> ClassId {
+        let index = match self
             .storage_classes
-            .iter_mut()
-            .find(|(name, _)| name == class)
+            .iter()
+            .position(|(name, _)| name == class)
         {
-            Some((_, total)) => *total += usage,
-            None => self.storage_classes.push((class.to_owned(), usage)),
-        }
+            Some(index) => index,
+            None => {
+                self.storage_classes
+                    .push((class.to_owned(), Usage::default()));
+                self.storage_classes.len() - 1
+            }
+        };
+        self.storage_classes[index].1 += usage;
+        ClassId(u16::try_from(index).expect("more than u16::MAX distinct storage classes"))
     }
 }
 
@@ -306,6 +331,29 @@ mod tests {
         assert_eq!(tree.node(find(&tree, "report.csv")).usage().bytes, 17);
         assert_eq!(tree.usage_by_kind(EntryKind::Noncurrent).bytes, 7);
         assert_eq!(tree.usage_by_kind(EntryKind::Current).bytes, 10);
+    }
+
+    #[test]
+    fn objects_keep_the_storage_class_of_their_current_version() {
+        let mut tree = Tree::new();
+        tree.insert(&Entry {
+            storage_class: "GLACIER".to_owned(),
+            kind: EntryKind::Noncurrent,
+            ..entry("a/old.bin", 5)
+        });
+        tree.insert(&entry("a/old.bin", 5));
+        tree.insert(&Entry {
+            storage_class: "GLACIER".to_owned(),
+            kind: EntryKind::Noncurrent,
+            ..entry("b.bin", 1)
+        });
+
+        assert_eq!(
+            tree.storage_class(find(&tree, "a/old.bin")),
+            Some("STANDARD")
+        );
+        assert_eq!(tree.storage_class(find(&tree, "b.bin")), Some("GLACIER"));
+        assert_eq!(tree.storage_class(find(&tree, "a/")), None);
     }
 
     #[test]

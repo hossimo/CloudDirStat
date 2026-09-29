@@ -7,11 +7,11 @@ WinDirStat for cloud object storage. Find out what is using the space (and the m
 CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and shows where the bytes are: by directory, by storage class, and by version state (current, noncurrent, delete markers).
 
 - **Least privilege:** only needs `s3:ListBucket`. It never reads or writes object contents.
-- **Native and small:** a single ~10 MB binary for Windows, macOS, and Linux. No runtime, no browser.
+- **Native and small:** single binaries for Windows, macOS, and Linux (CLI ~9 MB, GUI ~14 MB). No runtime, no browser.
 - **Fast:** lists prefixes in parallel.
 - **Cost-aware:** reports how many LIST requests a scan used and what they cost.
 
-> **Status:** early development. The command-line scanner for AWS S3 works. The treemap GUI, Azure Blob Storage, and Google Cloud Storage are next (see [Roadmap](#roadmap)).
+> **Status:** early development. The command-line scanner for AWS S3 works, and a first treemap GUI is in progress. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
 
 ## Usage
 
@@ -56,6 +56,15 @@ Largest objects
     11.2 MiB  backups/db-snapshot-0412.tar.gz
 ```
 
+### GUI
+
+```sh
+clouddirstat-gui
+clouddirstat-gui s3://my-bucket --profile prod
+```
+
+Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. The treemap fills in while the scan runs; each rectangle is an object, sized by bytes and colored by storage class. Hover a rectangle to see its path and size. **Stop** ends the scan and keeps the partial result.
+
 ### Credentials
 
 CloudDirStat uses the standard AWS credential chain, the same as the AWS CLI: environment variables, `~/.aws/credentials`, `~/.aws/config` profiles (including SSO), and EC2/ECS/EKS roles.
@@ -84,12 +93,13 @@ CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
 cargo build --release
 ```
 
-The binary is `target/release/clouddirstat` (`clouddirstat.exe` on Windows).
+The binaries are `target/release/clouddirstat` and `target/release/clouddirstat-gui` (with `.exe` on Windows).
 
 Development commands:
 
 ```sh
 cargo run -p clouddirstat -- scan s3://my-bucket
+cargo run -p clouddirstat-gui
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
@@ -102,6 +112,7 @@ cargo fmt --all
 | `crates/core` | Provider-agnostic folder tree, size aggregation, formatting. No I/O. |
 | `crates/providers` | Cloud scanners. Currently S3. |
 | `crates/cli` | The `clouddirstat` command-line tool. |
+| `crates/gui` | The `clouddirstat-gui` treemap app (egui). |
 
 Scanners stream objects in batches over a channel, and the tree is built while the scan is still running. This is what will let the GUI draw while a scan is in progress. To keep memory low on big buckets, the tree stores each path segment only once and does not keep full object keys.
 
@@ -128,7 +139,7 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 ## Roadmap
 
 - [x] S3 scanner CLI: directory tree, storage classes, versions, LIST cost
-- [ ] Treemap GUI (egui)
+- [ ] Treemap GUI (egui): basic treemap done; next click-to-zoom, tree view, shading
 - [ ] Incomplete multipart uploads
 - [ ] Estimated monthly storage cost per directory
 - [ ] Instant bucket totals from CloudWatch

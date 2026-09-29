@@ -1,0 +1,12 @@
+[package]
+name = "clouddirstat-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aws-config = "1.12.0"
+aws-sdk-s3 = "1.150.0"
+clouddirstat-core = { path = "../core" }
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["sync", "rt"] }

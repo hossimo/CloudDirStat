@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use clouddirstat_core::{Tree, format_count};
-use clouddirstat_providers::s3::{S3Location, S3Pricing, S3Scanner, ScanOptions};
+use clouddirstat_providers::s3::{CredentialSource, S3Location, S3Scanner, ScanOptions};
 use tokio::sync::mpsc;
 
 use crate::report::{Report, ReportOptions};
@@ -15,7 +15,10 @@ use crate::report::{Report, ReportOptions};
 const PROGRESS_INTERVAL: u64 = 10_000;
 
 #[derive(Parser)]
-#[command(version, about = "Disk usage statistics for cloud object storage")]
+#[command(
+    version = clouddirstat_core::LONG_VERSION,
+    about = "Disk usage statistics for cloud object storage"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -23,16 +26,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scan an S3 bucket (or prefix) and print a usage report
+    /// Scan an S3 bucket, a prefix, or all buckets and print a usage report
     Scan(ScanArgs),
 }
 
 #[derive(Args)]
 struct ScanArgs {
-    /// s3://bucket or s3://bucket/prefix/
+    /// s3://bucket, s3://bucket/prefix/, or s3:// for every bucket
+    /// (all buckets needs s3:ListAllMyBuckets)
     location: S3Location,
 
-    /// AWS profile from ~/.aws/config
+    /// AWS profile from ~/.aws/config (including IAM Identity Center and `aws login`
+    /// profiles). Access keys can be given with the AWS_ACCESS_KEY_ID,
+    /// AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN environment variables.
     #[arg(long)]
     profile: Option<String>,
 
@@ -66,21 +72,18 @@ async fn main() -> Result<()> {
 
 async fn scan(args: ScanArgs) -> Result<()> {
     let started = Instant::now();
-    let scanner = S3Scanner::connect(
-        &args.location.bucket,
-        args.profile.as_deref(),
-        args.region.as_deref(),
-    )
-    .await?;
+    let credentials = CredentialSource::Chain {
+        profile: args.profile.clone(),
+    };
+    let scanner = S3Scanner::connect(&args.location, &credentials, args.region.as_deref()).await?;
 
-    let pricing = Arc::new(S3Pricing::for_region(scanner.region()));
+    let pricing = Arc::new(scanner.pricing());
     let options = ScanOptions {
         include_versions: args.versions,
         concurrency: args.concurrency,
     };
-    let location = args.location.clone();
     let (sender, mut receiver) = mpsc::channel(256);
-    let scan = tokio::spawn(async move { scanner.scan(&location, &options, sender).await });
+    let scan = tokio::spawn(async move { scanner.scan(&options, sender).await });
 
     let mut tree = Tree::with_pricing(pricing.clone());
     let mut next_progress = PROGRESS_INTERVAL;
@@ -100,6 +103,12 @@ async fn scan(args: ScanArgs) -> Result<()> {
     let stats = scan.await??;
     if next_progress > PROGRESS_INTERVAL {
         eprint!("\r\x1b[2K");
+    }
+    for skipped in &stats.skipped_buckets {
+        eprintln!(
+            "warning: skipped bucket {}: {}",
+            skipped.bucket, skipped.reason
+        );
     }
 
     Report {

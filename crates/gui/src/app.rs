@@ -5,6 +5,8 @@ use clouddirstat_providers::s3::{S3Location, S3Pricing};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
+use crate::credentials_form::CredentialsForm;
+use crate::help::HelpWindow;
 use crate::legend;
 use crate::palette::{ColorMode, Colors};
 use crate::scan::{Scan, ScanRequest, ScanState};
@@ -20,7 +22,8 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 pub struct App {
     runtime: Runtime,
     location_input: String,
-    profile_input: String,
+    credentials: CredentialsForm,
+    help: HelpWindow,
     include_versions: bool,
     input_error: Option<String>,
     scan: Option<Scan>,
@@ -77,7 +80,8 @@ impl App {
         let mut app = Self {
             runtime,
             location_input: String::new(),
-            profile_input: profile.unwrap_or_default(),
+            credentials: CredentialsForm::new(profile),
+            help: HelpWindow::default(),
             include_versions,
             input_error: None,
             scan: None,
@@ -104,10 +108,16 @@ impl App {
                 return;
             }
         };
-        let profile = self.profile_input.trim();
+        let credentials = match self.credentials.source() {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                self.input_error = Some(error);
+                return;
+            }
+        };
         let request = ScanRequest {
             location,
-            profile: (!profile.is_empty()).then(|| profile.to_owned()),
+            credentials,
             include_versions: self.include_versions,
         };
         self.start_scan(request, ctx);
@@ -118,34 +128,46 @@ impl App {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        let mut submitted = false;
+        let mut scan_clicked = false;
         ui.horizontal(|ui| {
             ui.label("Location");
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location_input)
-                    .hint_text("s3://bucket/prefix/")
+                    .hint_text("s3://bucket/prefix/  or  s3:// for all buckets")
                     .desired_width(320.0),
             );
-            ui.label("Profile");
-            let profile = ui.add(
-                egui::TextEdit::singleline(&mut self.profile_input)
-                    .hint_text("default")
-                    .desired_width(120.0),
-            );
+            submitted |=
+                location.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            ui.separator();
+            submitted |= self.credentials.show_main_row(ui);
+            ui.separator();
             ui.checkbox(&mut self.include_versions, "Versions")
                 .on_hover_text("Include noncurrent versions and delete markers");
 
-            let submitted = (location.lost_focus() || profile.lost_focus())
-                && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if self.is_scanning() {
                 if ui.button("Stop").clicked()
                     && let Some(scan) = &mut self.scan
                 {
                     scan.stop();
                 }
-            } else if ui.button("Scan").clicked() || submitted {
-                self.start_scan_from_inputs(ui.ctx());
+            } else {
+                scan_clicked = ui.button("Scan").clicked();
+            }
+            ui.separator();
+            if ui
+                .button("Help")
+                .on_hover_text("Required permissions and how to sign in")
+                .clicked()
+            {
+                self.help.toggle();
             }
         });
+        submitted |= self.credentials.show_access_key_row(ui);
+
+        if (scan_clicked || submitted) && !self.is_scanning() {
+            self.start_scan_from_inputs(ui.ctx());
+        }
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
@@ -183,6 +205,22 @@ impl App {
                         format_count(stats.list_requests),
                         stats.estimated_cost_usd()
                     ));
+                    if !stats.skipped_buckets.is_empty() {
+                        let details = stats
+                            .skipped_buckets
+                            .iter()
+                            .map(|skipped| format!("{}: {}", skipped.bucket, skipped.reason))
+                            .collect::<Vec<_>>()
+                            .join(
+                                "
+",
+                            );
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!("{} buckets skipped", stats.skipped_buckets.len()),
+                        )
+                        .on_hover_text(details);
+                    }
                 }
                 ScanState::Stopped { .. } => {
                     ui.label(format!(
@@ -211,6 +249,15 @@ impl eframe::App for App {
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let bucket = self.location_input.trim().parse::<S3Location>().ok();
+        let bucket = bucket.as_ref().map(|location| {
+            if location.is_all_buckets() {
+                "*"
+            } else {
+                location.bucket.as_str()
+            }
+        });
+        self.help.show(ui.ctx(), bucket);
 
         let Some(scan) = &self.scan else {
             egui::CentralPanel::default().show(ui, |ui| {
@@ -284,7 +331,7 @@ fn pricing_note(pricing: &S3Pricing) -> String {
          First volume tier; Intelligent-Tiering at Frequent Access rates.
          Includes minimum billable sizes and archive overhead; excludes requests,
          retrieval, data transfer, and minimum storage duration charges.",
-        pricing.region(),
+        pricing.region_label(),
         S3Pricing::published()
     )
 }

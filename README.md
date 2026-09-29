@@ -1,3 +1,5 @@
+<img src="icons/png/icon-128.png" alt="CloudDirStat icon" width="96" align="right">
+
 # CloudDirStat
 
 [![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
@@ -19,6 +21,7 @@ CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and sh
 clouddirstat scan s3://my-bucket
 clouddirstat scan s3://my-bucket/logs/ --profile prod --depth 3
 clouddirstat scan s3://my-bucket --versions
+clouddirstat scan s3://                      # every bucket, each as a top-level folder
 ```
 
 | Option | Default | Description |
@@ -64,16 +67,35 @@ clouddirstat-gui
 clouddirstat-gui s3://my-bucket --profile prod
 ```
 
-Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup.
+Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. Use `s3://` as the location to scan every bucket at once (needs `s3:ListAllMyBuckets`); each bucket appears as a top-level folder, priced at its own region's rates, and buckets you can't list are skipped with a warning.
 
 - **Folder list:** every prefix and object, sorted by size, with its share of the parent folder. It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
-- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), and **Prefixes** (the largest top-level folders; click one to select it in the folder list).
+- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
 - **Stop** ends the scan and keeps the partial result.
+- **Help** explains the permissions a scan needs and shows a minimal IAM policy for the bucket in the Location field, ready to copy.
 
 ### Credentials
 
-CloudDirStat uses the standard AWS credential chain, the same as the AWS CLI: environment variables, `~/.aws/credentials`, `~/.aws/config` profiles (including SSO), and EC2/ECS/EKS roles.
+CloudDirStat uses the standard AWS credential chain, the same as the AWS CLI: environment variables, `~/.aws/credentials`, `~/.aws/config` profiles, and EC2/ECS/EKS roles. Pick a profile with `--profile` (CLI) or the **Profile** field (GUI).
+
+Prefer short-lived credentials over long-term access keys. Both of these work out of the box:
+
+| Method | Set up | Then |
+|---|---|---|
+| Console sign-in (`aws login`, AWS CLI v2) | `aws login --profile myprofile` | `clouddirstat scan s3://my-bucket --profile myprofile` |
+| IAM Identity Center (SSO) | `aws configure sso` | `aws sso login --profile myprofile`, then scan with `--profile myprofile` |
+
+**Access keys without an AWS config.** In the GUI, choose **Access key** and enter the access key ID, secret access key, and (for temporary credentials) session token. Keys are kept in memory for the session only: they are never written to disk or logged. The CLI reads keys from the standard environment variables instead of command-line flags, so they don't end up in shell history:
+
+```sh
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...   # only for temporary credentials
+clouddirstat scan s3://my-bucket
+```
+
+If you do create an access key, give it only the permissions below.
 
 ### Cost of a scan
 
@@ -101,6 +123,7 @@ The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 |---|---|---|
 | `s3:ListBucket` | yes | Listing objects and detecting the bucket region |
 | `s3:ListBucketVersions` | only with `--versions` | Noncurrent versions and delete markers |
+| `s3:ListAllMyBuckets` | only for `s3://` (all buckets) | Finding every bucket to scan them together |
 
 CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
 
@@ -114,6 +137,8 @@ cargo build --release
 ```
 
 The binaries are `target/release/clouddirstat` and `target/release/clouddirstat-gui` (with `.exe` on Windows).
+
+**Versions** come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and builds from later commits report `0.2.0+N` (N commits since the tag). Without a tag the version in `Cargo.toml` is used. `--version` and the GUI's Help window also show the short commit hash.
 
 Development commands:
 
@@ -155,6 +180,10 @@ region = us-east-1
 ```
 
 Indentation is only valid for nested settings, for example under `s3 =`.
+
+**Credentials expired / `aws login` or SSO session errors**
+
+Sessions from `aws login` and `aws sso login` expire. Run the login command again for that profile, then rescan.
 
 ## Roadmap
 

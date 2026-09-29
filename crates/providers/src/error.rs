@@ -10,7 +10,9 @@ pub enum Error {
     #[error("could not load AWS credentials (see Troubleshooting in README.md): {0}")]
     Credentials(String),
 
-    #[error("invalid location {0:?}, expected s3://bucket or s3://bucket/prefix")]
+    #[error(
+        "invalid location {0:?}, expected s3://bucket, s3://bucket/prefix, or s3:// for all buckets"
+    )]
     InvalidLocation(String),
 
     #[error("scan was cancelled")]

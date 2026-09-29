@@ -25,6 +25,27 @@ struct NameId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClassId(u16);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileTypeId(u32);
+
+/// Longest extension counted as a file type; longer suffixes are usually part of a name
+/// (`backup.2024-01-01T12-00`), not a type.
+const MAX_EXTENSION_LEN: usize = 10;
+
+/// The lowercase extension of an object name, or `""` when it has none.
+pub fn file_type(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, extension))
+            if !stem.is_empty()
+                && (1..=MAX_EXTENSION_LEN).contains(&extension.len())
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+        {
+            extension.to_ascii_lowercase()
+        }
+        _ => String::new(),
+    }
+}
+
 /// What an object's versions add up to, as far as the scan saw them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionState {
@@ -70,6 +91,7 @@ pub struct Node {
     children: Vec<NodeId>,
     usage: Usage,
     storage_class: Option<ClassId>,
+    file_type: Option<FileTypeId>,
     version_flags: u8,
 }
 
@@ -98,6 +120,8 @@ pub struct Tree {
     name_ids: HashMap<Arc<str>, NameId>,
     children_by_name: HashMap<(NodeId, NameId, NodeKind), NodeId>,
     storage_classes: Vec<(String, Usage)>,
+    file_types: Vec<(String, Usage)>,
+    file_type_ids: HashMap<String, FileTypeId>,
     kinds: [Usage; EntryKind::ALL.len()],
     version_states: [Usage; VersionState::ALL.len()],
     pricing: Option<Arc<dyn Pricing>>,
@@ -119,6 +143,8 @@ impl Tree {
             name_ids: HashMap::new(),
             children_by_name: HashMap::new(),
             storage_classes: Vec::new(),
+            file_types: Vec::new(),
+            file_type_ids: HashMap::new(),
             kinds: Default::default(),
             version_states: Default::default(),
             pricing: None,
@@ -131,6 +157,7 @@ impl Tree {
             children: Vec::new(),
             usage: Usage::default(),
             storage_class: None,
+            file_type: None,
             version_flags: 0,
         });
         tree
@@ -185,6 +212,9 @@ impl Tree {
     }
 
     fn update_object(&mut self, id: NodeId, entry: &Entry, class: ClassId, added: Usage) {
+        let file_type = self.add_file_type_usage(self.node(id).name, added);
+        self.nodes[id.index()].file_type = Some(file_type);
+
         let node = &mut self.nodes[id.index()];
         if entry.kind == EntryKind::Current || node.storage_class.is_none() {
             node.storage_class = Some(class);
@@ -259,6 +289,23 @@ impl Tree {
         self.kinds[kind as usize]
     }
 
+    /// The lowercase extension of an object (`""` for none). `None` for directories.
+    pub fn file_type(&self, id: NodeId) -> Option<&str> {
+        let file_type = self.node(id).file_type?;
+        Some(&self.file_types[file_type.0 as usize].0)
+    }
+
+    /// Usage per file type (`""` for no extension), largest first.
+    pub fn file_types(&self) -> Vec<(&str, Usage)> {
+        let mut types: Vec<_> = self
+            .file_types
+            .iter()
+            .map(|(name, usage)| (name.as_str(), *usage))
+            .collect();
+        types.sort_by_key(|(_, usage)| Reverse(usage.bytes));
+        types
+    }
+
     pub fn storage_classes(&self) -> Vec<(&str, Usage)> {
         let mut classes: Vec<_> = self
             .storage_classes
@@ -308,10 +355,28 @@ impl Tree {
             children: Vec::new(),
             usage: Usage::default(),
             storage_class: None,
+            file_type: None,
             version_flags: 0,
         });
         self.nodes[parent.index()].children.push(id);
         self.children_by_name.insert((parent, name, kind), id);
+        id
+    }
+
+    fn add_file_type_usage(&mut self, name: NameId, usage: Usage) -> FileTypeId {
+        let file_type = file_type(&self.names[name.0 as usize]);
+        let id = match self.file_type_ids.get(&file_type) {
+            Some(&id) => id,
+            None => {
+                let id = FileTypeId(
+                    u32::try_from(self.file_types.len()).expect("tree exceeds u32::MAX file types"),
+                );
+                self.file_types.push((file_type.clone(), Usage::default()));
+                self.file_type_ids.insert(file_type, id);
+                id
+            }
+        };
+        self.file_types[id.0 as usize].1 += usage;
         id
     }
 
@@ -500,6 +565,38 @@ mod tests {
             tree.total().monthly_cost
         );
         assert!(!Tree::new().has_pricing());
+    }
+
+    #[test]
+    fn groups_objects_by_file_type() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("video/a.MOV", 100));
+        tree.insert(&entry("video/b.mov", 50));
+        tree.insert(&entry("notes.txt", 5));
+        tree.insert(&entry("Makefile", 1));
+        tree.insert(&entry("folder/", 0));
+
+        assert_eq!(
+            tree.file_types(),
+            [
+                ("mov", Usage::new(150, 2)),
+                ("txt", Usage::new(5, 1)),
+                ("", Usage::new(1, 1)),
+            ]
+        );
+        assert_eq!(tree.file_type(find(&tree, "video/a.MOV")), Some("mov"));
+        assert_eq!(tree.file_type(find(&tree, "video/")), None);
+    }
+
+    #[test]
+    fn only_short_alphanumeric_suffixes_are_file_types() {
+        assert_eq!(file_type("photo.JPG"), "jpg");
+        assert_eq!(file_type("syslog.1"), "1");
+        assert_eq!(file_type("archive.tar.gz"), "gz");
+        assert_eq!(file_type(".gitignore"), "");
+        assert_eq!(file_type("README"), "");
+        assert_eq!(file_type("backup.2024-01-01T12-00"), "");
+        assert_eq!(file_type("name.averyveryverylongsuffix"), "");
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use clouddirstat_core::{Cost, Entry, EntryKind, Pricing};
 
 use super::prices::{PUBLISHED, REGIONS};
@@ -36,24 +38,43 @@ pub struct RegionPrices {
 /// are not included.
 #[derive(Debug)]
 pub struct S3Pricing {
-    region: &'static RegionPrices,
+    default: &'static RegionPrices,
     fallback: &'static RegionPrices,
+    /// For all-buckets scans, whose keys start with `bucket/`: each bucket's prices.
+    by_bucket: HashMap<String, &'static RegionPrices>,
 }
 
 impl S3Pricing {
     /// Prices for `region`, or us-east-1 prices when the region is not in the table.
     pub fn for_region(region: &str) -> Self {
-        let fallback = find(FALLBACK_REGION).unwrap_or(&REGIONS[0]);
+        let fallback = fallback();
         Self {
-            region: find(region).unwrap_or(fallback),
+            default: find(region).unwrap_or(fallback),
             fallback,
+            by_bucket: HashMap::new(),
         }
     }
 
-    /// The region whose prices are used, which differs from the bucket region only
-    /// when that region is not in the price table.
-    pub fn region(&self) -> &'static str {
-        self.region.region
+    /// Prices for an all-buckets scan: each `(bucket, region)` at its region's prices.
+    pub fn for_buckets<'a>(buckets: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        let fallback = fallback();
+        Self {
+            default: fallback,
+            fallback,
+            by_bucket: buckets
+                .into_iter()
+                .map(|(bucket, region)| (bucket.to_owned(), find(region).unwrap_or(fallback)))
+                .collect(),
+        }
+    }
+
+    /// Where the prices come from, for display: a region, or "each bucket's region".
+    pub fn region_label(&self) -> String {
+        if self.by_bucket.is_empty() {
+            self.default.region.to_owned()
+        } else {
+            "each bucket's region".to_owned()
+        }
     }
 
     /// Date of the AWS price list the table was generated from.
@@ -61,8 +82,16 @@ impl S3Pricing {
         PUBLISHED
     }
 
-    fn price(&self, field: fn(&RegionPrices) -> Option<f64>) -> f64 {
-        field(self.region)
+    fn prices_for(&self, key: &str) -> &'static RegionPrices {
+        if self.by_bucket.is_empty() {
+            return self.default;
+        }
+        let bucket = key.split_once('/').map_or(key, |(bucket, _)| bucket);
+        self.by_bucket.get(bucket).copied().unwrap_or(self.default)
+    }
+
+    fn price(&self, prices: &RegionPrices, field: fn(&RegionPrices) -> Option<f64>) -> f64 {
+        field(prices)
             .or_else(|| field(self.fallback))
             .unwrap_or(0.0)
     }
@@ -74,34 +103,27 @@ impl Pricing for S3Pricing {
             return Cost::ZERO;
         }
         let size = entry.size;
+        let prices = self.prices_for(&entry.key);
+        let price = |field| self.price(prices, field);
         let per_gb = |bytes: u64, price: f64| bytes as f64 / BYTES_PER_GB * price;
-        let standard = self.price(|p| p.standard);
+        let standard = price(|p| p.standard);
 
         let usd = match entry.storage_class.as_str() {
-            "STANDARD_IA" => per_gb(
-                size.max(MINIMUM_BILLABLE_SIZE),
-                self.price(|p| p.standard_ia),
-            ),
-            "ONEZONE_IA" => per_gb(
-                size.max(MINIMUM_BILLABLE_SIZE),
-                self.price(|p| p.onezone_ia),
-            ),
-            "GLACIER_IR" => per_gb(
-                size.max(MINIMUM_BILLABLE_SIZE),
-                self.price(|p| p.glacier_ir),
-            ),
+            "STANDARD_IA" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.standard_ia)),
+            "ONEZONE_IA" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.onezone_ia)),
+            "GLACIER_IR" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.glacier_ir)),
             "INTELLIGENT_TIERING" => {
                 let monitoring = if size >= MONITORED_SIZE {
-                    self.price(|p| p.int_monitoring_per_object)
+                    price(|p| p.int_monitoring_per_object)
                 } else {
                     0.0
                 };
-                per_gb(size, self.price(|p| p.intelligent_tiering)) + monitoring
+                per_gb(size, price(|p| p.intelligent_tiering)) + monitoring
             }
-            "GLACIER" => archive(size, self.price(|p| p.glacier), standard),
-            "DEEP_ARCHIVE" => archive(size, self.price(|p| p.deep_archive), standard),
-            "REDUCED_REDUNDANCY" => per_gb(size, self.price(|p| p.reduced_redundancy)),
-            "EXPRESS_ONEZONE" => per_gb(size, self.price(|p| p.express_onezone)),
+            "GLACIER" => archive(size, price(|p| p.glacier), standard),
+            "DEEP_ARCHIVE" => archive(size, price(|p| p.deep_archive), standard),
+            "REDUCED_REDUNDANCY" => per_gb(size, price(|p| p.reduced_redundancy)),
+            "EXPRESS_ONEZONE" => per_gb(size, price(|p| p.express_onezone)),
             _ => per_gb(size, standard),
         };
         Cost::from_usd(usd)
@@ -111,6 +133,10 @@ impl Pricing for S3Pricing {
 fn archive(size: u64, archive_price: f64, standard_price: f64) -> f64 {
     let gb = |bytes: u64| bytes as f64 / BYTES_PER_GB;
     gb(size + ARCHIVE_OVERHEAD) * archive_price + gb(ARCHIVE_INDEX_OVERHEAD) * standard_price
+}
+
+fn fallback() -> &'static RegionPrices {
+    find(FALLBACK_REGION).unwrap_or(&REGIONS[0])
 }
 
 fn find(region: &str) -> Option<&'static RegionPrices> {
@@ -141,7 +167,7 @@ mod tests {
     #[test]
     fn prices_standard_by_the_gigabyte() {
         let pricing = S3Pricing::for_region("us-east-1");
-        let standard = pricing.price(|p| p.standard);
+        let standard = pricing.price(pricing.default, |p| p.standard);
         assert!(standard > 0.0);
         assert!(close(cost(&pricing, "STANDARD", 10 * GB), 10.0 * standard));
     }
@@ -177,11 +203,33 @@ mod tests {
     #[test]
     fn unknown_regions_fall_back_to_us_east_1() {
         let pricing = S3Pricing::for_region("xx-nowhere-1");
-        assert_eq!(pricing.region(), "us-east-1");
+        assert_eq!(pricing.region_label(), "us-east-1");
         assert!(close(
             cost(&pricing, "STANDARD", GB),
             cost(&S3Pricing::for_region("us-east-1"), "STANDARD", GB)
         ));
+    }
+
+    #[test]
+    fn prices_each_bucket_at_its_own_region() {
+        let pricing = S3Pricing::for_buckets([("east", "us-east-1"), ("brazil", "sa-east-1")]);
+        let key_cost = |key: &str| {
+            pricing
+                .monthly_cost(&Entry {
+                    key: key.to_owned(),
+                    size: GB,
+                    storage_class: "STANDARD".to_owned(),
+                    kind: EntryKind::Current,
+                })
+                .usd()
+        };
+
+        let virginia = cost(&S3Pricing::for_region("us-east-1"), "STANDARD", GB);
+        let sao_paulo = cost(&S3Pricing::for_region("sa-east-1"), "STANDARD", GB);
+        assert!(close(key_cost("east/a.bin"), virginia));
+        assert!(close(key_cost("brazil/a.bin"), sao_paulo));
+        assert!(close(key_cost("unknown/a.bin"), virginia));
+        assert_eq!(pricing.region_label(), "each bucket's region");
     }
 
     #[test]

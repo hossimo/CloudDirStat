@@ -43,6 +43,9 @@ pub fn show(
                 let rows = prefix_rows(tree, root, colors);
                 table(ui, "Prefix", &rows, total, selected)
             }
+            ColorMode::FileTypes => {
+                table(ui, "File type", &file_type_rows(tree, colors), total, None)
+            }
             ColorMode::Versions => {
                 table(ui, "Object state", &version_state_rows(tree), total, None);
                 ui.add_space(12.0);
@@ -95,6 +98,40 @@ fn entry_kind_rows(tree: &Tree) -> Vec<LegendRow> {
         .collect()
 }
 
+/// The largest file types, then everything else in one row.
+fn file_type_rows(tree: &Tree, colors: &Colors) -> Vec<LegendRow> {
+    let types = tree.file_types();
+    let mut rows: Vec<LegendRow> = types
+        .iter()
+        .take(MAX_FILE_TYPE_ROWS)
+        .map(|&(file_type, usage)| LegendRow {
+            color: Some(colors.file_type(file_type).unwrap_or(colors.other())),
+            label: if file_type.is_empty() {
+                "(no extension)".to_owned()
+            } else {
+                format!(".{file_type}")
+            },
+            usage,
+            node: None,
+        })
+        .collect();
+
+    let rest = &types[types.len().min(MAX_FILE_TYPE_ROWS)..];
+    if !rest.is_empty() {
+        let mut usage = Usage::default();
+        for &(_, type_usage) in rest {
+            usage += type_usage;
+        }
+        rows.push(LegendRow {
+            color: Some(colors.other()),
+            label: format!("{} more types", rest.len()),
+            usage,
+            node: None,
+        });
+    }
+    rows
+}
+
 fn prefix_rows(tree: &Tree, root: NodeId, colors: &Colors) -> Vec<LegendRow> {
     let mut other = tree.node(root).usage();
     let mut rows: Vec<LegendRow> = palette::top_prefixes(tree, root)
@@ -122,6 +159,7 @@ fn prefix_rows(tree: &Tree, root: NodeId, colors: &Colors) -> Vec<LegendRow> {
 }
 
 const ROW_HEIGHT: f32 = 20.0;
+const MAX_FILE_TYPE_ROWS: usize = 50;
 
 /// A table with resizable columns. Tables are keyed by `title`, so each one keeps its
 /// own column widths. Returns the node of the row that was clicked, if any.

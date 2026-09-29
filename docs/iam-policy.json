@@ -16,6 +16,14 @@
         "s3:ListBucketVersions"
       ],
       "Resource": "arn:aws:s3:::YOUR-BUCKET"
+    },
+    {
+      "Sid": "CloudDirStatAllBucketsOptional",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets"
+      ],
+      "Resource": "*"
     }
   ]
 }

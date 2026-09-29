@@ -48,7 +48,7 @@ impl Report<'_> {
         println!(
             "Estimated storage cost ~{}/month ({} list prices from {})",
             format_usd(total.monthly_cost),
-            self.pricing.region(),
+            self.pricing.region_label(),
             S3Pricing::published()
         );
     }

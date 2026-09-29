@@ -9,8 +9,9 @@ pub const SELECTED: Color32 = Color32::from_rgb(0x5a, 0xc8, 0xfa);
 pub const FOLDER_ICON: Color32 = Color32::from_rgb(0xe8, 0xc0, 0x4a);
 const NEUTRAL: Color32 = Color32::from_rgb(0x80, 0x80, 0x80);
 
-/// Colors for top-level prefixes, largest first. Anything past these is [`NEUTRAL`].
-const PREFIX_COLORS: [Color32; 12] = [
+/// Colors for the largest prefixes or file types, in order. Anything past these is
+/// [`NEUTRAL`].
+const CATEGORY_COLORS: [Color32; 12] = [
     Color32::from_rgb(0x4e, 0x79, 0xa7),
     Color32::from_rgb(0xe1, 0x57, 0x59),
     Color32::from_rgb(0x59, 0xa1, 0x4f),
@@ -53,16 +54,23 @@ pub enum ColorMode {
     StorageClass,
     Versions,
     Prefixes,
+    FileTypes,
 }
 
 impl ColorMode {
-    pub const ALL: [ColorMode; 3] = [Self::StorageClass, Self::Versions, Self::Prefixes];
+    pub const ALL: [ColorMode; 4] = [
+        Self::StorageClass,
+        Self::Versions,
+        Self::Prefixes,
+        Self::FileTypes,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::StorageClass => "Storage classes",
             Self::Versions => "Versions",
             Self::Prefixes => "Prefixes",
+            Self::FileTypes => "File types",
         }
     }
 }
@@ -72,6 +80,7 @@ pub struct Colors {
     mode: ColorMode,
     root: NodeId,
     prefixes: HashMap<NodeId, Color32>,
+    file_types: HashMap<String, Color32>,
 }
 
 impl Colors {
@@ -79,7 +88,16 @@ impl Colors {
         let prefixes = match mode {
             ColorMode::Prefixes => top_prefixes(tree, root)
                 .into_iter()
-                .zip(PREFIX_COLORS)
+                .zip(CATEGORY_COLORS)
+                .collect(),
+            _ => HashMap::new(),
+        };
+        let file_types = match mode {
+            ColorMode::FileTypes => tree
+                .file_types()
+                .into_iter()
+                .map(|(file_type, _)| file_type.to_owned())
+                .zip(CATEGORY_COLORS)
                 .collect(),
             _ => HashMap::new(),
         };
@@ -87,6 +105,7 @@ impl Colors {
             mode,
             root,
             prefixes,
+            file_types,
         }
     }
 
@@ -95,7 +114,16 @@ impl Colors {
             ColorMode::StorageClass => tree.storage_class(id).map_or(NEUTRAL, storage_class),
             ColorMode::Versions => tree.version_state(id).map_or(NEUTRAL, version_state),
             ColorMode::Prefixes => self.prefix_of(tree, id),
+            ColorMode::FileTypes => tree
+                .file_type(id)
+                .and_then(|file_type| self.file_type(file_type))
+                .unwrap_or(NEUTRAL),
         }
+    }
+
+    /// The color of `file_type` if it is one of the colored (largest) file types.
+    pub fn file_type(&self, file_type: &str) -> Option<Color32> {
+        self.file_types.get(file_type).copied()
     }
 
     /// The color of `prefix` if it is one of the colored top-level prefixes.
@@ -124,6 +152,6 @@ pub fn top_prefixes(tree: &Tree, root: NodeId) -> Vec<NodeId> {
     tree.children_by_size(root)
         .into_iter()
         .filter(|&child| tree.node(child).kind() == NodeKind::Directory)
-        .take(PREFIX_COLORS.len())
+        .take(CATEGORY_COLORS.len())
         .collect()
 }

@@ -4,6 +4,19 @@ mod treemap;
 
 use std::ops::{AddAssign, SubAssign};
 
+/// The app version: from the nearest git tag when built from a checkout (see build.rs),
+/// otherwise the Cargo package version.
+pub const VERSION: &str = env!("CLOUDDIRSTAT_VERSION");
+/// The short hash of the commit the app was built from, or `unknown`.
+pub const GIT_HASH: &str = env!("CLOUDDIRSTAT_GIT_HASH");
+/// `VERSION (GIT_HASH)`, as shown by `--version` and in Help.
+pub const LONG_VERSION: &str = concat!(
+    env!("CLOUDDIRSTAT_VERSION"),
+    " (",
+    env!("CLOUDDIRSTAT_GIT_HASH"),
+    ")"
+);
+
 pub use format::{format_bytes, format_count, format_usd};
 pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
 pub use treemap::{Rect, squarify};

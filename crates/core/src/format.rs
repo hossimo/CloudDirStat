@@ -1,3 +1,5 @@
+use crate::Cost;
+
 const UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -27,6 +29,15 @@ pub fn format_count(count: u64) -> String {
     formatted
 }
 
+/// Dollars with cents, e.g. `$1,234.56`. Tiny nonzero amounts show as `<$0.01`.
+pub fn format_usd(cost: Cost) -> String {
+    let cents = (cost.usd() * 100.0).round() as u64;
+    if cents == 0 && cost > Cost::ZERO {
+        return "<$0.01".to_owned();
+    }
+    format!("${}.{:02}", format_count(cents / 100), cents % 100)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,6 +49,14 @@ mod tests {
         assert_eq!(format_bytes(1024), "1.0 KiB");
         assert_eq!(format_bytes(1536), "1.5 KiB");
         assert_eq!(format_bytes(5 * 1024 * 1024 * 1024), "5.0 GiB");
+    }
+
+    #[test]
+    fn formats_dollars_with_cents() {
+        assert_eq!(format_usd(Cost::ZERO), "$0.00");
+        assert_eq!(format_usd(Cost::from_usd(0.001)), "<$0.01");
+        assert_eq!(format_usd(Cost::from_usd(0.005)), "$0.01");
+        assert_eq!(format_usd(Cost::from_usd(1234.567)), "$1,234.57");
     }
 
     #[test]

@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{Entry, NodeId, NodeKind, Tree};
-use clouddirstat_providers::s3::{S3Location, S3Scanner, ScanOptions, ScanStats};
+use clouddirstat_providers::s3::{S3Location, S3Pricing, S3Scanner, ScanOptions, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -28,8 +29,10 @@ pub struct Scan {
     pub location: S3Location,
     pub include_versions: bool,
     pub tree: Tree,
+    pub pricing: Option<Arc<S3Pricing>>,
     pub state: ScanState,
     started: Instant,
+    region: oneshot::Receiver<String>,
     entries: mpsc::Receiver<Vec<Entry>>,
     outcome: oneshot::Receiver<clouddirstat_providers::Result<ScanStats>>,
 }
@@ -38,12 +41,13 @@ impl Scan {
     pub fn start(runtime: &Runtime, request: ScanRequest, ctx: &egui::Context) -> Self {
         let (sender, entries) = mpsc::channel(256);
         let (outcome_sender, outcome) = oneshot::channel();
+        let (region_sender, region) = oneshot::channel();
         let location = request.location.clone();
         let include_versions = request.include_versions;
         let ctx = ctx.clone();
 
         runtime.spawn(async move {
-            let result = run(&request, sender).await;
+            let result = run(&request, region_sender, sender).await;
             let _ = outcome_sender.send(result);
             ctx.request_repaint();
         });
@@ -52,8 +56,10 @@ impl Scan {
             location,
             include_versions,
             tree: Tree::new(),
+            pricing: None,
             state: ScanState::Running,
             started: Instant::now(),
+            region,
             entries,
             outcome,
         }
@@ -94,10 +100,11 @@ impl Scan {
         }
 
         let deadline = Instant::now() + budget;
-        let mut changed = false;
+        let mut changed = self.receive_region();
         loop {
             match self.entries.try_recv() {
                 Ok(batch) => {
+                    self.receive_region();
                     for entry in &batch {
                         self.tree.insert(entry);
                     }
@@ -114,6 +121,22 @@ impl Scan {
             }
         }
         changed
+    }
+
+    /// Switches to a priced tree once the bucket region is known. The scan task sends
+    /// the region before listing anything, so the tree is still empty at that point.
+    fn receive_region(&mut self) -> bool {
+        if self.pricing.is_some() {
+            return false;
+        }
+        let Ok(region) = self.region.try_recv() else {
+            return false;
+        };
+        debug_assert_eq!(self.tree.total().objects, 0);
+        let pricing = Arc::new(S3Pricing::for_region(&region));
+        self.tree = Tree::with_pricing(pricing.clone());
+        self.pricing = Some(pricing);
+        true
     }
 
     /// Stops listing but keeps the partial tree. The scanner sees the closed channel
@@ -146,10 +169,12 @@ impl Scan {
 
 async fn run(
     request: &ScanRequest,
+    region: oneshot::Sender<String>,
     sender: mpsc::Sender<Vec<Entry>>,
 ) -> clouddirstat_providers::Result<ScanStats> {
     let scanner =
         S3Scanner::connect(&request.location.bucket, request.profile.as_deref(), None).await?;
+    let _ = region.send(scanner.region().to_owned());
     let options = ScanOptions {
         include_versions: request.include_versions,
         concurrency: CONCURRENCY,

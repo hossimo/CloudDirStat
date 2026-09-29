@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use clouddirstat_core::{NodeId, format_bytes, format_count};
-use clouddirstat_providers::s3::S3Location;
+use clouddirstat_core::{NodeId, format_bytes, format_count, format_usd};
+use clouddirstat_providers::s3::{S3Location, S3Pricing};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
@@ -167,6 +167,11 @@ impl App {
                 format_count(total.objects)
             );
             let elapsed = scan.elapsed().as_secs_f64();
+            if let Some(pricing) = &scan.pricing {
+                ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
+                    .on_hover_text(pricing_note(pricing));
+                ui.separator();
+            }
             match &scan.state {
                 ScanState::Running => {
                     ui.spinner();
@@ -239,14 +244,19 @@ impl eframe::App for App {
             .resizable(true)
             .default_size(340.0)
             .show(ui, |ui| {
-                legend::show(
+                let clicked = legend::show(
                     ui,
                     tree,
                     root,
                     &mut color_mode,
                     colors,
                     scan.include_versions,
+                    view.selected,
                 );
+                if let Some(prefix) = clicked {
+                    view.selected = Some(prefix);
+                    view.tree_view.reveal(tree, prefix);
+                }
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -266,4 +276,15 @@ impl eframe::App for App {
             view.refreshed_at = None;
         }
     }
+}
+
+fn pricing_note(pricing: &S3Pricing) -> String {
+    format!(
+        "Estimated storage cost from {} list prices (AWS Price List, {}).
+         First volume tier; Intelligent-Tiering at Frequent Access rates.
+         Includes minimum billable sizes and archive overhead; excludes requests,
+         retrieval, data transfer, and minimum storage duration charges.",
+        pricing.region(),
+        S3Pricing::published()
+    )
 }

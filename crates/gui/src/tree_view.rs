@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use clouddirstat_core::{NodeId, NodeKind, Tree, format_bytes, format_count};
+use clouddirstat_core::{NodeId, NodeKind, Tree, format_bytes, format_count, format_usd};
 use eframe::egui::{self, Align, Color32, Label, Sense};
 use egui_extras::{Column, TableBuilder};
 
@@ -73,6 +73,7 @@ impl TreeView {
             .column(Column::initial(110.0).at_least(40.0).clip(true))
             .column(Column::initial(70.0).at_least(40.0).clip(true))
             .column(Column::initial(90.0).at_least(40.0).clip(true))
+            .column(Column::initial(90.0).at_least(40.0).clip(true))
             .column(Column::initial(100.0).at_least(40.0).clip(true));
         if let Some(row) = scroll_row {
             table = table.scroll_to_row(row, Some(Align::Center));
@@ -81,7 +82,14 @@ impl TreeView {
         let mut toggled = None;
         table
             .header(ROW_HEIGHT, |mut header| {
-                for title in ["Name", "Size proportion", "Percent", "Size", "Objects"] {
+                for title in [
+                    "Name",
+                    "Size proportion",
+                    "Percent",
+                    "Size",
+                    "Cost/mo",
+                    "Objects",
+                ] {
                     header.col(|ui| {
                         ui.strong(title);
                     });
@@ -117,6 +125,7 @@ impl TreeView {
                         right_aligned(ui, format!("{:.1}%", fraction * 100.0));
                     });
                     table_row.col(|ui| right_aligned(ui, format_bytes(node.usage().bytes)));
+                    table_row.col(|ui| right_aligned(ui, format_usd(node.usage().monthly_cost)));
                     table_row.col(|ui| right_aligned(ui, format_count(node.usage().objects)));
 
                     let response = table_row.response();

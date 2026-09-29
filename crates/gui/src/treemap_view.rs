@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    NodeId, NodeKind, Tree, VersionState, format_bytes, format_count, squarify,
+    NodeId, NodeKind, Tree, VersionState, format_bytes, format_count, format_usd, squarify,
 };
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions};
 
@@ -148,6 +148,9 @@ fn node_tooltip(ui: &mut egui::Ui, tree: &Tree, root: NodeId, id: NodeId) {
         format_bytes(usage.bytes),
         usage.bytes as f64 * 100.0 / total as f64
     ));
+    if tree.has_pricing() {
+        ui.label(format!("~{} per month", format_usd(usage.monthly_cost)));
+    }
     if node.kind() == NodeKind::Directory {
         ui.label(format!("{} objects", format_count(usage.objects)));
     }

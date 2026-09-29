@@ -1,0 +1,193 @@
+use clouddirstat_core::{Cost, Entry, EntryKind, Pricing};
+
+use super::prices::{PUBLISHED, REGIONS};
+
+const FALLBACK_REGION: &str = "us-east-1";
+const BYTES_PER_GB: f64 = 1024.0 * 1024.0 * 1024.0;
+/// IA, One Zone-IA and Glacier Instant Retrieval bill small objects as this size.
+const MINIMUM_BILLABLE_SIZE: u64 = 128 * 1024;
+/// Intelligent-Tiering does not monitor (or charge monitoring for) smaller objects.
+const MONITORED_SIZE: u64 = 128 * 1024;
+/// Glacier Flexible Retrieval and Deep Archive add per-object metadata: 32 KB billed at
+/// the archive rate and 8 KB at the Standard rate.
+const ARCHIVE_OVERHEAD: u64 = 32 * 1024;
+const ARCHIVE_INDEX_OVERHEAD: u64 = 8 * 1024;
+
+/// List prices for one region, as generated into `prices.rs`.
+#[derive(Debug)]
+pub struct RegionPrices {
+    pub region: &'static str,
+    pub standard: Option<f64>,
+    pub intelligent_tiering: Option<f64>,
+    pub standard_ia: Option<f64>,
+    pub onezone_ia: Option<f64>,
+    pub glacier_ir: Option<f64>,
+    pub glacier: Option<f64>,
+    pub reduced_redundancy: Option<f64>,
+    pub express_onezone: Option<f64>,
+    pub int_monitoring_per_object: Option<f64>,
+    pub deep_archive: Option<f64>,
+}
+
+/// Estimated S3 storage cost per month from public list prices.
+///
+/// Uses the first volume tier and prices Intelligent-Tiering at its Frequent Access
+/// tier, so it leans high. Requests, retrieval, transfer, and minimum-duration charges
+/// are not included.
+#[derive(Debug)]
+pub struct S3Pricing {
+    region: &'static RegionPrices,
+    fallback: &'static RegionPrices,
+}
+
+impl S3Pricing {
+    /// Prices for `region`, or us-east-1 prices when the region is not in the table.
+    pub fn for_region(region: &str) -> Self {
+        let fallback = find(FALLBACK_REGION).unwrap_or(&REGIONS[0]);
+        Self {
+            region: find(region).unwrap_or(fallback),
+            fallback,
+        }
+    }
+
+    /// The region whose prices are used, which differs from the bucket region only
+    /// when that region is not in the price table.
+    pub fn region(&self) -> &'static str {
+        self.region.region
+    }
+
+    /// Date of the AWS price list the table was generated from.
+    pub fn published() -> &'static str {
+        PUBLISHED
+    }
+
+    fn price(&self, field: fn(&RegionPrices) -> Option<f64>) -> f64 {
+        field(self.region)
+            .or_else(|| field(self.fallback))
+            .unwrap_or(0.0)
+    }
+}
+
+impl Pricing for S3Pricing {
+    fn monthly_cost(&self, entry: &Entry) -> Cost {
+        if entry.kind == EntryKind::DeleteMarker {
+            return Cost::ZERO;
+        }
+        let size = entry.size;
+        let per_gb = |bytes: u64, price: f64| bytes as f64 / BYTES_PER_GB * price;
+        let standard = self.price(|p| p.standard);
+
+        let usd = match entry.storage_class.as_str() {
+            "STANDARD_IA" => per_gb(
+                size.max(MINIMUM_BILLABLE_SIZE),
+                self.price(|p| p.standard_ia),
+            ),
+            "ONEZONE_IA" => per_gb(
+                size.max(MINIMUM_BILLABLE_SIZE),
+                self.price(|p| p.onezone_ia),
+            ),
+            "GLACIER_IR" => per_gb(
+                size.max(MINIMUM_BILLABLE_SIZE),
+                self.price(|p| p.glacier_ir),
+            ),
+            "INTELLIGENT_TIERING" => {
+                let monitoring = if size >= MONITORED_SIZE {
+                    self.price(|p| p.int_monitoring_per_object)
+                } else {
+                    0.0
+                };
+                per_gb(size, self.price(|p| p.intelligent_tiering)) + monitoring
+            }
+            "GLACIER" => archive(size, self.price(|p| p.glacier), standard),
+            "DEEP_ARCHIVE" => archive(size, self.price(|p| p.deep_archive), standard),
+            "REDUCED_REDUNDANCY" => per_gb(size, self.price(|p| p.reduced_redundancy)),
+            "EXPRESS_ONEZONE" => per_gb(size, self.price(|p| p.express_onezone)),
+            _ => per_gb(size, standard),
+        };
+        Cost::from_usd(usd)
+    }
+}
+
+fn archive(size: u64, archive_price: f64, standard_price: f64) -> f64 {
+    let gb = |bytes: u64| bytes as f64 / BYTES_PER_GB;
+    gb(size + ARCHIVE_OVERHEAD) * archive_price + gb(ARCHIVE_INDEX_OVERHEAD) * standard_price
+}
+
+fn find(region: &str) -> Option<&'static RegionPrices> {
+    REGIONS.iter().find(|prices| prices.region == region)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    fn cost(pricing: &S3Pricing, class: &str, size: u64) -> f64 {
+        pricing
+            .monthly_cost(&Entry {
+                key: "k".to_owned(),
+                size,
+                storage_class: class.to_owned(),
+                kind: EntryKind::Current,
+            })
+            .usd()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn prices_standard_by_the_gigabyte() {
+        let pricing = S3Pricing::for_region("us-east-1");
+        let standard = pricing.price(|p| p.standard);
+        assert!(standard > 0.0);
+        assert!(close(cost(&pricing, "STANDARD", 10 * GB), 10.0 * standard));
+    }
+
+    #[test]
+    fn small_infrequent_access_objects_bill_as_128_kib() {
+        let pricing = S3Pricing::for_region("us-east-1");
+        assert!(close(
+            cost(&pricing, "STANDARD_IA", 1),
+            cost(&pricing, "STANDARD_IA", MINIMUM_BILLABLE_SIZE)
+        ));
+    }
+
+    #[test]
+    fn archive_classes_add_per_object_overhead() {
+        let pricing = S3Pricing::for_region("us-east-1");
+        assert!(cost(&pricing, "DEEP_ARCHIVE", 0) > 0.0);
+        assert!(cost(&pricing, "GLACIER", 0) > 0.0);
+    }
+
+    #[test]
+    fn delete_markers_are_free() {
+        let pricing = S3Pricing::for_region("us-east-1");
+        let marker = Entry {
+            key: "k".to_owned(),
+            size: 0,
+            storage_class: "STANDARD".to_owned(),
+            kind: EntryKind::DeleteMarker,
+        };
+        assert_eq!(pricing.monthly_cost(&marker), Cost::ZERO);
+    }
+
+    #[test]
+    fn unknown_regions_fall_back_to_us_east_1() {
+        let pricing = S3Pricing::for_region("xx-nowhere-1");
+        assert_eq!(pricing.region(), "us-east-1");
+        assert!(close(
+            cost(&pricing, "STANDARD", GB),
+            cost(&S3Pricing::for_region("us-east-1"), "STANDARD", GB)
+        ));
+    }
+
+    #[test]
+    fn regional_prices_differ() {
+        let virginia = cost(&S3Pricing::for_region("us-east-1"), "STANDARD", GB);
+        let sao_paulo = cost(&S3Pricing::for_region("sa-east-1"), "STANDARD", GB);
+        assert!(sao_paulo > virginia);
+    }
+}

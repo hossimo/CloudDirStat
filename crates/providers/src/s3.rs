@@ -1,4 +1,6 @@
 mod location;
+mod prices;
+mod pricing;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +15,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
 pub use location::S3Location;
+pub use pricing::S3Pricing;
 
 use crate::{Error, Result};
 
@@ -41,6 +44,7 @@ impl ScanStats {
 
 pub struct S3Scanner {
     client: Client,
+    region: String,
 }
 
 impl S3Scanner {
@@ -62,11 +66,17 @@ impl S3Scanner {
         };
 
         let s3_config = aws_sdk_s3::config::Builder::from(&config)
-            .region(Region::new(region))
+            .region(Region::new(region.clone()))
             .build();
         Ok(Self {
             client: Client::from_conf(s3_config),
+            region,
         })
+    }
+
+    /// The bucket's region.
+    pub fn region(&self) -> &str {
+        &self.region
     }
 
     pub async fn scan(

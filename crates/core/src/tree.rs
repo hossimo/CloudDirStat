@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
-use crate::{Entry, EntryKind, Usage};
+use crate::{Entry, EntryKind, Pricing, Usage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
@@ -100,6 +100,7 @@ pub struct Tree {
     storage_classes: Vec<(String, Usage)>,
     kinds: [Usage; EntryKind::ALL.len()],
     version_states: [Usage; VersionState::ALL.len()],
+    pricing: Option<Arc<dyn Pricing>>,
 }
 
 impl Default for Tree {
@@ -120,6 +121,7 @@ impl Tree {
             storage_classes: Vec::new(),
             kinds: Default::default(),
             version_states: Default::default(),
+            pricing: None,
         };
         let root_name = tree.intern("");
         tree.nodes.push(Node {
@@ -134,10 +136,27 @@ impl Tree {
         tree
     }
 
+    /// A tree that also adds up the monthly cost of everything inserted.
+    pub fn with_pricing(pricing: Arc<dyn Pricing>) -> Self {
+        Self {
+            pricing: Some(pricing),
+            ..Self::new()
+        }
+    }
+
+    pub fn has_pricing(&self) -> bool {
+        self.pricing.is_some()
+    }
+
     pub fn insert(&mut self, entry: &Entry) {
         let usage = Usage {
             bytes: entry.size,
             objects: 1,
+            monthly_cost: self
+                .pricing
+                .as_ref()
+                .map(|pricing| pricing.monthly_cost(entry))
+                .unwrap_or_default(),
         };
 
         let mut current = Self::ROOT;
@@ -354,13 +373,7 @@ mod tests {
         tree.insert(&entry("logs/2025/c.log", 25));
         tree.insert(&entry("readme.txt", 5));
 
-        assert_eq!(
-            tree.total(),
-            Usage {
-                bytes: 180,
-                objects: 4
-            }
-        );
+        assert_eq!(tree.total(), Usage::new(180, 4));
         assert_eq!(tree.node(find(&tree, "logs/")).usage().bytes, 175);
         assert_eq!(tree.node(find(&tree, "logs/2024/")).usage().objects, 2);
         assert_eq!(tree.node(Tree::ROOT).children().len(), 2);
@@ -373,13 +386,7 @@ mod tests {
         tree.insert(&entry("photos/cat.jpg", 10));
 
         let photos = find(&tree, "photos/");
-        assert_eq!(
-            tree.node(photos).usage(),
-            Usage {
-                bytes: 10,
-                objects: 2
-            }
-        );
+        assert_eq!(tree.node(photos).usage(), Usage::new(10, 2));
         assert_eq!(tree.node(photos).children().len(), 1);
     }
 
@@ -464,27 +471,35 @@ mod tests {
         assert_eq!(tree.version_state(Tree::ROOT), None);
 
         let usage = |state| tree.usage_by_version_state(state);
+        assert_eq!(usage(VersionState::Current), Usage::new(10, 1));
+        assert_eq!(usage(VersionState::WithOldVersions), Usage::new(25, 2));
+        assert_eq!(usage(VersionState::Deleted), Usage::new(7, 2));
+    }
+
+    #[derive(Debug)]
+    struct OneNanodollarPerByte;
+
+    impl Pricing for OneNanodollarPerByte {
+        fn monthly_cost(&self, entry: &Entry) -> crate::Cost {
+            crate::Cost::from_usd(entry.size as f64 / 1e9)
+        }
+    }
+
+    #[test]
+    fn adds_up_monthly_cost_when_priced() {
+        let mut tree = Tree::with_pricing(Arc::new(OneNanodollarPerByte));
+        tree.insert(&entry("logs/a", 100));
+        tree.insert(&entry("logs/b", 50));
+        tree.insert(&entry("c", 7));
+
+        let cost = |id| tree.node(id).usage().monthly_cost;
+        assert_eq!(cost(find(&tree, "logs/")), crate::Cost::from_usd(150e-9));
+        assert_eq!(tree.total().monthly_cost, crate::Cost::from_usd(157e-9));
         assert_eq!(
-            usage(VersionState::Current),
-            Usage {
-                bytes: 10,
-                objects: 1
-            }
+            tree.storage_classes()[0].1.monthly_cost,
+            tree.total().monthly_cost
         );
-        assert_eq!(
-            usage(VersionState::WithOldVersions),
-            Usage {
-                bytes: 25,
-                objects: 2
-            }
-        );
-        assert_eq!(
-            usage(VersionState::Deleted),
-            Usage {
-                bytes: 7,
-                objects: 2
-            }
-        );
+        assert!(!Tree::new().has_pricing());
     }
 
     #[test]
@@ -526,25 +541,7 @@ mod tests {
         });
 
         let classes = tree.storage_classes();
-        assert_eq!(
-            classes[0],
-            (
-                "GLACIER",
-                Usage {
-                    bytes: 50,
-                    objects: 1
-                }
-            )
-        );
-        assert_eq!(
-            classes[1],
-            (
-                "STANDARD",
-                Usage {
-                    bytes: 5,
-                    objects: 1
-                }
-            )
-        );
+        assert_eq!(classes[0], ("GLACIER", Usage::new(50, 1)));
+        assert_eq!(classes[1], ("STANDARD", Usage::new(5, 1)));
     }
 }

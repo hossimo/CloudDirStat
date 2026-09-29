@@ -1,7 +1,9 @@
 use std::time::Duration;
 
-use clouddirstat_core::{EntryKind, NodeId, NodeKind, Tree, Usage, format_bytes, format_count};
-use clouddirstat_providers::s3::{S3Location, ScanStats};
+use clouddirstat_core::{
+    EntryKind, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_usd,
+};
+use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
 
 pub struct ReportOptions {
     pub depth: usize,
@@ -12,6 +14,7 @@ pub struct ReportOptions {
 pub struct Report<'a> {
     pub tree: &'a Tree,
     pub location: &'a S3Location,
+    pub pricing: &'a S3Pricing,
     pub stats: ScanStats,
     pub elapsed: Duration,
     pub options: ReportOptions,
@@ -42,6 +45,12 @@ impl Report<'_> {
             format_count(self.stats.list_requests),
             self.stats.estimated_cost_usd()
         );
+        println!(
+            "Estimated storage cost ~{}/month ({} list prices from {})",
+            format_usd(total.monthly_cost),
+            self.pricing.region(),
+            S3Pricing::published()
+        );
     }
 
     fn print_storage_classes(&self) {
@@ -60,10 +69,11 @@ impl Report<'_> {
 
     fn print_usage_row(&self, label: &str, usage: Usage) {
         println!(
-            "  {:<22} {:>10} {:>6.1}%  {:>12} objects",
+            "  {:<22} {:>10} {:>6.1}% {:>12}/mo  {:>12} objects",
             label,
             format_bytes(usage.bytes),
             self.percent_of_total(usage.bytes),
+            format_usd(usage.monthly_cost),
             format_count(usage.objects)
         );
     }
@@ -90,11 +100,15 @@ impl Report<'_> {
         let hidden = children.iter().skip(self.options.top);
         let hidden_count = hidden.len();
         if hidden_count > 0 {
-            let hidden_bytes: u64 = hidden.map(|&id| self.tree.node(id).usage().bytes).sum();
+            let mut hidden_usage = Usage::default();
+            for &id in hidden {
+                hidden_usage += self.tree.node(id).usage();
+            }
             println!(
-                "  {:>10} {:>6.1}%  {}... {} more",
-                format_bytes(hidden_bytes),
-                self.percent_of_total(hidden_bytes),
+                "  {:>10} {:>6.1}% {:>12}/mo  {}... {} more",
+                format_bytes(hidden_usage.bytes),
+                self.percent_of_total(hidden_usage.bytes),
+                format_usd(hidden_usage.monthly_cost),
                 indent(level),
                 format_count(hidden_count as u64)
             );
@@ -102,11 +116,12 @@ impl Report<'_> {
     }
 
     fn print_tree_row(&self, id: NodeId, level: usize) {
-        let bytes = self.tree.node(id).usage().bytes;
+        let usage = self.tree.node(id).usage();
         println!(
-            "  {:>10} {:>6.1}%  {}{}",
-            format_bytes(bytes),
-            self.percent_of_total(bytes),
+            "  {:>10} {:>6.1}% {:>12}/mo  {}{}",
+            format_bytes(usage.bytes),
+            self.percent_of_total(usage.bytes),
+            format_usd(usage.monthly_cost),
             indent(level),
             self.display_name(id)
         );
@@ -115,8 +130,13 @@ impl Report<'_> {
     fn print_largest_objects(&self) {
         section("Largest objects");
         for id in self.tree.largest_objects(self.options.top) {
-            let bytes = self.tree.node(id).usage().bytes;
-            println!("  {:>10}  {}", format_bytes(bytes), self.tree.path(id));
+            let usage = self.tree.node(id).usage();
+            println!(
+                "  {:>10} {:>12}/mo  {}",
+                format_bytes(usage.bytes),
+                format_usd(usage.monthly_cost),
+                self.tree.path(id)
+            );
         }
     }
 

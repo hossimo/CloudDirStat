@@ -1,12 +1,13 @@
 mod report;
 
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use clouddirstat_core::{Tree, format_count};
-use clouddirstat_providers::s3::{S3Location, S3Scanner, ScanOptions};
+use clouddirstat_providers::s3::{S3Location, S3Pricing, S3Scanner, ScanOptions};
 use tokio::sync::mpsc;
 
 use crate::report::{Report, ReportOptions};
@@ -72,6 +73,7 @@ async fn scan(args: ScanArgs) -> Result<()> {
     )
     .await?;
 
+    let pricing = Arc::new(S3Pricing::for_region(scanner.region()));
     let options = ScanOptions {
         include_versions: args.versions,
         concurrency: args.concurrency,
@@ -80,7 +82,7 @@ async fn scan(args: ScanArgs) -> Result<()> {
     let (sender, mut receiver) = mpsc::channel(256);
     let scan = tokio::spawn(async move { scanner.scan(&location, &options, sender).await });
 
-    let mut tree = Tree::new();
+    let mut tree = Tree::with_pricing(pricing.clone());
     let mut next_progress = PROGRESS_INTERVAL;
     while let Some(entries) = receiver.recv().await {
         for entry in &entries {
@@ -103,6 +105,7 @@ async fn scan(args: ScanArgs) -> Result<()> {
     Report {
         tree: &tree,
         location: &args.location,
+        pricing: &pricing,
         stats,
         elapsed: started.elapsed(),
         options: ReportOptions {

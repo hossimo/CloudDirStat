@@ -9,7 +9,7 @@ CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and sh
 - **Least privilege:** only needs `s3:ListBucket`. It never reads or writes object contents.
 - **Native and small:** single binaries for Windows, macOS, and Linux (CLI ~9 MB, GUI ~14 MB). No runtime, no browser.
 - **Fast:** lists prefixes in parallel.
-- **Cost-aware:** reports how many LIST requests a scan used and what they cost.
+- **Cost-aware:** estimates the monthly storage cost of every folder and object from your bucket region's list prices, and reports what the scan itself cost in LIST requests.
 
 > **Status:** early development. The command-line scanner for AWS S3 works, and a first treemap GUI is in progress. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
 
@@ -35,25 +35,26 @@ Example output:
 ```
 s3://my-backups/  6.8 GiB in 1,024 objects
 Scanned in 0.5s using 3 LIST requests (~$0.0000)
+Estimated storage cost ~$0.16/month (us-east-1 list prices from 2026-09-28)
 
 By storage class
-  STANDARD                  6.8 GiB  100.0%         1,024 objects
+  STANDARD                  6.8 GiB  100.0%        $0.16/mo         1,024 objects
 
 By version state
-  Current versions          6.8 GiB  100.0%         1,024 objects
-  Noncurrent versions           0 B    0.0%             0 objects
-  Delete markers                0 B    0.0%             0 objects
+  Current versions          6.8 GiB  100.0%        $0.16/mo         1,024 objects
+  Noncurrent versions           0 B    0.0%        $0.00/mo             0 objects
+  Delete markers                0 B    0.0%        $0.00/mo             0 objects
 
 Largest directories
-     6.8 GiB  100.0%  /
-     6.6 GiB   98.3%    backups/
-    11.2 MiB    0.2%      db-snapshot-0412.tar.gz
-     6.6 GiB   97.5%      ... 1,016 more
-    83.5 MiB    1.2%    archive.zip
+     6.8 GiB  100.0%        $0.16/mo  /
+     6.6 GiB   98.3%        $0.15/mo    backups/
+    11.2 MiB    0.2%       <$0.01/mo      db-snapshot-0412.tar.gz
+     6.6 GiB   97.5%        $0.15/mo      ... 1,016 more
+    83.5 MiB    1.2%       <$0.01/mo    archive.zip
 
 Largest objects
-    83.5 MiB  archive.zip
-    11.2 MiB  backups/db-snapshot-0412.tar.gz
+    83.5 MiB       <$0.01/mo  archive.zip
+    11.2 MiB       <$0.01/mo  backups/db-snapshot-0412.tar.gz
 ```
 
 ### GUI
@@ -67,16 +68,30 @@ Enter a location (and optionally a profile) and press **Scan**, or pass them on 
 
 - **Folder list:** every prefix and object, sorted by size, with its share of the parent folder. It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
-- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), and **Prefixes** (the largest top-level folders).
+- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), and **Prefixes** (the largest top-level folders; click one to select it in the folder list).
 - **Stop** ends the scan and keeps the partial result.
 
 ### Credentials
 
 CloudDirStat uses the standard AWS credential chain, the same as the AWS CLI: environment variables, `~/.aws/credentials`, `~/.aws/config` profiles (including SSO), and EC2/ECS/EKS roles.
 
-### Cost
+### Cost of a scan
 
 S3 charges for LIST requests (about $0.005 per 1,000 in most regions). Each request returns up to 1,000 objects, so scanning 10 million objects costs roughly $0.05.
+
+### Storage cost estimates
+
+The **Cost/mo** figures (GUI columns, tooltips, and status bar; CLI report) estimate what keeping the objects stored costs per month, using the S3 list prices for the bucket's region:
+
+- Each storage class at its own per-GB-month price, including the 128 KB minimum billable size for Standard-IA, One Zone-IA, and Glacier Instant Retrieval, the 40 KB per-object overhead for Glacier Flexible Retrieval and Deep Archive, and the Intelligent-Tiering monitoring fee.
+- Noncurrent versions count (scan with `--versions` / **Versions** to include them); delete markers are free.
+- Approximations: first volume tier only (large buckets pay slightly less), Intelligent-Tiering priced at its Frequent Access tier (the highest), and no request, retrieval, data transfer, minimum-duration, or discount charges.
+
+Prices are compiled into the binary from the public AWS Price List ([S3 pricing](https://aws.amazon.com/s3/pricing/)), so estimating needs no extra permissions or network calls. The date of the price list is shown with the estimate. To refresh the prices (no AWS credentials needed):
+
+```sh
+python scripts/update_s3_prices.py
+```
 
 ## Permissions
 
@@ -146,7 +161,7 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 - [x] S3 scanner CLI: directory tree, storage classes, versions, LIST cost
 - [ ] Treemap GUI (egui): folder list, shaded treemap, color by class/versions/prefix done; next per-folder scan progress, zoom, largest-files list
 - [ ] Incomplete multipart uploads
-- [ ] Estimated monthly storage cost per directory
+- [x] Estimated monthly storage cost per directory and object
 - [ ] Instant bucket totals from CloudWatch
 - [ ] Read S3 Inventory reports for billion-object buckets
 - [ ] Azure Blob Storage

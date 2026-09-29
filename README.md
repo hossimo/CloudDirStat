@@ -6,14 +6,16 @@
 
 WinDirStat for cloud object storage. Find out what is using the space (and the money) in your buckets.
 
-CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and shows where the bytes are: by directory, by storage class, and by version state (current, noncurrent, delete markers).
+CloudDirStat lists a bucket (or all of them), rebuilds a folder tree from the object keys, and shows where the bytes and the money are: by folder, storage class, file type, and version state, in a sortable folder list and a treemap.
 
-- **Least privilege:** only needs `s3:ListBucket`. It never reads or writes object contents.
-- **Native and small:** single binaries for Windows, macOS, and Linux (CLI ~9 MB, GUI ~14 MB). No runtime, no browser.
-- **Fast:** lists prefixes in parallel.
-- **Cost-aware:** estimates the monthly storage cost of every folder and object from your bucket region's list prices, and reports what the scan itself cost in LIST requests.
+- **Least privilege:** only needs `s3:ListBucket`. Optional permissions add features and are skipped with a warning when missing. It never reads or writes object contents.
+- **Cost-aware:** estimates the monthly storage cost of every folder and object from each bucket region's list prices, and reports what the scan itself cost in LIST requests.
+- **Finds hidden costs:** noncurrent versions, deleted objects whose old versions are still billed, and incomplete multipart uploads that normal listings don't show.
+- **All buckets at once:** scan `s3://` to see every bucket in one tree.
+- **Native and small:** single binaries for Windows, macOS, and Linux, x64 and ARM64 (CLI ~9 MB, GUI ~14 MB). No runtime, no browser.
+- **Fast and lean:** lists prefixes and buckets in parallel; about 66 bytes of memory per object (roughly 650 MB for 10 million).
 
-> **Status:** early development. The command-line scanner for AWS S3 works, and a first treemap GUI is in progress. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
+> **Status:** early development, but usable: the CLI and GUI both work for AWS S3, and [prebuilt releases](#download) are available. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
 
 ![CloudDirStat scanning six demo buckets: folder list, file types legend, and treemap colored by file type](screenshots/demo-1.png)
 
@@ -51,6 +53,7 @@ By version state
   Current versions          6.8 GiB  100.0%        $0.16/mo         1,024 objects
   Noncurrent versions           0 B    0.0%        $0.00/mo             0 objects
   Delete markers                0 B    0.0%        $0.00/mo             0 objects
+  Incomplete uploads            0 B    0.0%        $0.00/mo             0 objects
 
 Largest directories
      6.8 GiB  100.0%        $0.16/mo  /
@@ -75,7 +78,8 @@ Enter a location (and optionally a profile) and press **Scan**, or pass them on 
 
 - **Folder list:** every prefix and object, sorted by size, with its share of the parent folder. It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
-- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
+- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions and deleted objects whose old versions are still billed, which need **Versions** checked, plus incomplete uploads, which are always found), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
+- **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details).
 - **Stop** ends the scan and keeps the partial result.
 - **Help** explains the permissions a scan needs and shows a minimal IAM policy for the bucket in the Location field, ready to copy.
 
@@ -201,7 +205,7 @@ Build the GUI with the `demo` feature to scan made-up buckets instead of AWS, so
 cargo run --release -p clouddirstat-gui --features demo -- s3://
 ```
 
-`s3://` shows six fictional `acme-*` buckets in different regions; `s3://acme-backups/` (or any demo bucket name) shows one. Check **Versions** for noncurrent versions and delete markers. The data is generated from a fixed seed, so it looks the same every time; set `CLOUDDIRSTAT_DEMO_OBJECTS` for more or fewer objects (default 120,000).
+`s3://` shows six fictional `acme-*` buckets in different regions, including some incomplete uploads; `s3://acme-backups/` (or any demo bucket name) shows one. Check **Versions** for noncurrent versions and delete markers. The data is generated from a fixed seed, so it looks the same every time; set `CLOUDDIRSTAT_DEMO_OBJECTS` for more or fewer objects (default 120,000).
 
 ## Troubleshooting
 
@@ -229,11 +233,24 @@ Sessions from `aws login` and `aws sso login` expire. Run the login command agai
 
 ## Roadmap
 
-- [x] S3 scanner CLI: directory tree, storage classes, versions, LIST cost
-- [ ] Treemap GUI (egui): folder list, shaded treemap, color by class/versions/prefix done; next per-folder scan progress, zoom, largest-files list
-- [ ] Incomplete multipart uploads
-- [x] Estimated monthly storage cost per directory and object
-- [ ] Instant bucket totals from CloudWatch
+Done:
+
+- [x] S3 scanner CLI: folder tree, storage classes, versions, LIST cost
+- [x] Treemap GUI: folder list, cushion-shaded treemap, color by storage class, versions, prefix, or file type
+- [x] Estimated monthly storage cost per folder and object, by region
+- [x] Incomplete multipart uploads
+- [x] Scan all buckets at once (`s3://`)
+- [x] Credentials: profiles, `aws login`, IAM Identity Center, access keys
+- [x] Low memory for large buckets (~66 bytes per object)
+- [x] Release builds for Windows, macOS, and Linux (x64 and ARM64)
+
+Next:
+
+- [ ] Click to zoom into a folder in the treemap
+- [ ] Largest files list
+- [ ] Last modified column
+- [ ] Instant bucket totals and scan-cost estimate from CloudWatch
+- [ ] macOS app bundle and code signing
 - [ ] Read S3 Inventory reports for billion-object buckets
 - [ ] Azure Blob Storage
 - [ ] Google Cloud Storage

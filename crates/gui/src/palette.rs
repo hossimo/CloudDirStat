@@ -46,6 +46,7 @@ pub fn version_state(state: VersionState) -> Color32 {
         VersionState::Current => Color32::from_rgb(0x4e, 0x79, 0xa7),
         VersionState::WithOldVersions => Color32::from_rgb(0xf2, 0x8e, 0x2b),
         VersionState::Deleted => Color32::from_rgb(0xe1, 0x57, 0x59),
+        VersionState::IncompleteUpload => Color32::from_rgb(0xb0, 0x7a, 0xa1),
     }
 }
 

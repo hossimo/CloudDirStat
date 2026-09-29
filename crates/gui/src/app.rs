@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use clouddirstat_core::{NodeId, format_bytes, format_count, format_usd};
-use clouddirstat_providers::s3::{S3Location, S3Pricing};
+use clouddirstat_core::{EntryKind, NodeId, format_bytes, format_count, format_usd};
+use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
@@ -190,6 +190,25 @@ impl App {
                 format_count(total.objects)
             );
             let elapsed = scan.elapsed().as_secs_f64();
+            let uploads = scan.tree.usage_by_kind(EntryKind::IncompleteUpload);
+            if uploads.objects > 0 {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "{} in {} incomplete uploads (~{}/mo)",
+                        format_bytes(uploads.bytes),
+                        format_count(uploads.objects),
+                        format_usd(uploads.monthly_cost)
+                    ),
+                )
+                .on_hover_text(
+                    "Parts of multipart uploads that were never completed or aborted. \
+                     They are billed but hidden from normal listings. See them in the \
+                     Versions tab, and clean them up with a lifecycle rule \
+                     (AbortIncompleteMultipartUpload).",
+                );
+                ui.separator();
+            }
             if let Some(pricing) = &scan.pricing {
                 ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
                     .on_hover_text(pricing_note(pricing));
@@ -206,22 +225,7 @@ impl App {
                         format_count(stats.list_requests),
                         stats.estimated_cost_usd()
                     ));
-                    if !stats.skipped_buckets.is_empty() {
-                        let details = stats
-                            .skipped_buckets
-                            .iter()
-                            .map(|skipped| format!("{}: {}", skipped.bucket, skipped.reason))
-                            .collect::<Vec<_>>()
-                            .join(
-                                "
-",
-                            );
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
-                            format!("{} buckets skipped", stats.skipped_buckets.len()),
-                        )
-                        .on_hover_text(details);
-                    }
+                    warnings(ui, stats);
                 }
                 ScanState::Stopped { .. } => {
                     ui.label(format!(
@@ -339,4 +343,23 @@ fn pricing_note(pricing: &S3Pricing) -> String {
         pricing.region_label(),
         S3Pricing::published()
     )
+}
+
+/// Skipped buckets and checks that could not run, with the details on hover.
+fn warnings(ui: &mut egui::Ui, stats: &ScanStats) {
+    let skipped = stats
+        .skipped_buckets
+        .iter()
+        .map(|skipped| format!("Skipped {}: {}", skipped.bucket, skipped.reason));
+    let details: Vec<String> = skipped.chain(stats.warnings.iter().cloned()).collect();
+    if details.is_empty() {
+        return;
+    }
+    let summary = match (stats.skipped_buckets.len(), stats.warnings.len()) {
+        (0, warnings) => format!("{warnings} warnings"),
+        (buckets, 0) => format!("{buckets} buckets skipped"),
+        (buckets, warnings) => format!("{buckets} buckets skipped, {warnings} warnings"),
+    };
+    ui.colored_label(ui.visuals().warn_fg_color, summary)
+        .on_hover_text(details.join("\n"));
 }

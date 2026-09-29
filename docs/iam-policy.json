@@ -18,6 +18,22 @@
       "Resource": "arn:aws:s3:::YOUR-BUCKET"
     },
     {
+      "Sid": "CloudDirStatIncompleteUploadsOptional",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET"
+    },
+    {
+      "Sid": "CloudDirStatIncompleteUploadSizesOptional",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
+    },
+    {
       "Sid": "CloudDirStatAllBucketsOptional",
       "Effect": "Allow",
       "Action": [

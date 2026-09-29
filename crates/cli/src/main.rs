@@ -110,6 +110,9 @@ async fn scan(args: ScanArgs) -> Result<()> {
             skipped.bucket, skipped.reason
         );
     }
+    for warning in &stats.warnings {
+        eprintln!("warning: {warning}");
+    }
 
     Report {
         tree: &tree,

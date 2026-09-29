@@ -4,8 +4,8 @@ mod prices;
 mod pricing;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_s3::Client;
@@ -43,6 +43,9 @@ pub struct ScanStats {
     pub list_requests: u64,
     /// Buckets left out of an all-buckets scan, e.g. for lack of `s3:ListBucket`.
     pub skipped_buckets: Vec<SkippedBucket>,
+    /// Optional checks that could not run, e.g. incomplete uploads without
+    /// `s3:ListBucketMultipartUploads`. The scan itself still completed.
+    pub warnings: Vec<String>,
 }
 
 impl ScanStats {
@@ -139,6 +142,7 @@ impl S3Scanner {
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
         let requests = Arc::new(AtomicU64::new(self.setup_requests));
         let slots = Arc::new(Semaphore::new(options.concurrency.max(1)));
+        let warnings = Arc::new(Mutex::new(Vec::new()));
         let lister = |target: &Target, key_prefix: String| Lister {
             client: target.client.clone(),
             bucket: target.bucket.clone(),
@@ -146,6 +150,7 @@ impl S3Scanner {
             include_versions: options.include_versions,
             requests: Arc::clone(&requests),
             slots: Arc::clone(&slots),
+            warnings: Arc::clone(&warnings),
             sink: sink.clone(),
         };
         let mut skipped = self.skipped.clone();
@@ -178,9 +183,11 @@ impl S3Scanner {
             }
         }
 
+        let warnings = warnings.lock().map(|list| list.clone()).unwrap_or_default();
         Ok(ScanStats {
             list_requests: requests.load(Ordering::Relaxed),
             skipped_buckets: skipped,
+            warnings,
         })
     }
 
@@ -222,10 +229,11 @@ fn record_bucket_result(
 
 /// Lists everything under `prefix`: expands prefixes breadth-first until there are
 /// enough to keep `concurrency` requests busy, then lists each one fully in parallel.
+/// Incomplete multipart uploads under the prefix are listed last.
 async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Result<()> {
     let concurrency = concurrency.max(1);
 
-    let mut prefixes = vec![prefix];
+    let mut prefixes = vec![prefix.clone()];
     for _ in 0..MAX_SPLIT_DEPTH {
         if prefixes.is_empty() || prefixes.len() >= concurrency {
             break;
@@ -250,7 +258,7 @@ async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Resu
     while let Some(finished) = tasks.join_next().await {
         finished??;
     }
-    Ok(())
+    lister.list_incomplete_uploads(prefix).await
 }
 
 /// One S3 client per region, shared by every bucket in that region.
@@ -291,7 +299,14 @@ struct Lister {
     requests: Arc<AtomicU64>,
     /// Shared by every bucket in a scan: one slot per listing in progress.
     slots: Arc<Semaphore>,
+    warnings: Arc<Mutex<Vec<String>>>,
     sink: EntrySender,
+}
+
+struct Upload {
+    key: String,
+    upload_id: String,
+    storage_class: String,
 }
 
 impl Lister {
@@ -383,6 +398,135 @@ impl Lister {
             }
             key_marker = page.next_key_marker().map(str::to_owned);
             version_marker = page.next_version_id_marker().map(str::to_owned);
+        }
+    }
+
+    /// Sends every incomplete multipart upload under `prefix` as an entry sized by its
+    /// uploaded parts. Missing permissions become warnings, not errors.
+    async fn list_incomplete_uploads(&self, prefix: String) -> Result<()> {
+        let uploads = match self.find_uploads(prefix).await {
+            Ok(uploads) => uploads,
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(error) => {
+                self.warn(format!(
+                    "{}: incomplete uploads not checked. {error}",
+                    self.bucket
+                ));
+                return Ok(());
+            }
+        };
+
+        let mut tasks = JoinSet::new();
+        for upload in uploads {
+            let lister = self.clone();
+            tasks.spawn(async move {
+                let size = lister.uploaded_bytes(&upload).await;
+                (upload, size)
+            });
+        }
+
+        let mut entries = Vec::new();
+        let mut unknown_sizes = None;
+        while let Some(finished) = tasks.join_next().await {
+            let (upload, size) = finished?;
+            let size = match size {
+                Ok(size) => size,
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(error) => {
+                    unknown_sizes.get_or_insert(error);
+                    0
+                }
+            };
+            entries.push(Entry {
+                key: self.key(Some(&upload.key)),
+                size,
+                storage_class: upload.storage_class,
+                kind: EntryKind::IncompleteUpload,
+            });
+        }
+        if let Some(error) = unknown_sizes {
+            self.warn(format!(
+                "{}: sizes of incomplete uploads unknown. {error}",
+                self.bucket
+            ));
+        }
+        for batch in entries.chunks(1000) {
+            self.send(batch.to_vec()).await?;
+        }
+        Ok(())
+    }
+
+    async fn find_uploads(&self, prefix: String) -> Result<Vec<Upload>> {
+        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+        let mut uploads = Vec::new();
+        let mut key_marker = None;
+        let mut upload_id_marker = None;
+        loop {
+            let page = self
+                .client
+                .list_multipart_uploads()
+                .bucket(&self.bucket)
+                .prefix(&prefix)
+                .set_key_marker(key_marker.take())
+                .set_upload_id_marker(upload_id_marker.take())
+                .send()
+                .await
+                .map_err(|error| {
+                    request_error(
+                        "ListMultipartUploads",
+                        "s3:ListBucketMultipartUploads",
+                        error,
+                    )
+                })?;
+            self.requests.fetch_add(1, Ordering::Relaxed);
+
+            uploads.extend(page.uploads().iter().filter_map(|upload| {
+                Some(Upload {
+                    key: upload.key()?.to_owned(),
+                    upload_id: upload.upload_id()?.to_owned(),
+                    storage_class: storage_class(
+                        upload.storage_class().map(|class| class.as_str()),
+                    ),
+                })
+            }));
+
+            if !page.is_truncated().unwrap_or(false) {
+                return Ok(uploads);
+            }
+            key_marker = page.next_key_marker().map(str::to_owned);
+            upload_id_marker = page.next_upload_id_marker().map(str::to_owned);
+        }
+    }
+
+    /// The billed size of an upload: the sum of the parts uploaded so far.
+    async fn uploaded_bytes(&self, upload: &Upload) -> Result<u64> {
+        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+        let mut pages = self
+            .client
+            .list_parts()
+            .bucket(&self.bucket)
+            .key(&upload.key)
+            .upload_id(&upload.upload_id)
+            .into_paginator()
+            .send();
+        let mut bytes = 0;
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|error| {
+                request_error("ListParts", "s3:ListMultipartUploadParts", error)
+            })?;
+            self.requests.fetch_add(1, Ordering::Relaxed);
+            bytes += page
+                .parts()
+                .iter()
+                .map(|part| to_size(part.size()))
+                .sum::<u64>();
+        }
+        Ok(bytes)
+    }
+
+    fn warn(&self, warning: String) {
+        if let Ok(mut warnings) = self.warnings.lock() {
+            warnings.push(warning);
         }
     }
 

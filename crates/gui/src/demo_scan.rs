@@ -63,7 +63,7 @@ pub async fn run(
     }
     Ok(ScanStats {
         list_requests,
-        skipped_buckets: Vec::new(),
+        ..ScanStats::default()
     })
 }
 

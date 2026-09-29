@@ -96,16 +96,25 @@ pub enum EntryKind {
     Current,
     Noncurrent,
     DeleteMarker,
+    /// A multipart upload that was started but never completed or aborted. Its parts
+    /// are billed but don't appear in normal listings.
+    IncompleteUpload,
 }
 
 impl EntryKind {
-    pub const ALL: [EntryKind; 3] = [Self::Current, Self::Noncurrent, Self::DeleteMarker];
+    pub const ALL: [EntryKind; 4] = [
+        Self::Current,
+        Self::Noncurrent,
+        Self::DeleteMarker,
+        Self::IncompleteUpload,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Current => "Current versions",
             Self::Noncurrent => "Noncurrent versions",
             Self::DeleteMarker => "Delete markers",
+            Self::IncompleteUpload => "Incomplete uploads",
         }
     }
 }

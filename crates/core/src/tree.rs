@@ -70,21 +70,32 @@ pub enum VersionState {
     WithOldVersions,
     /// No current version: deleted (or overwritten away), but older versions remain.
     Deleted,
+    /// Parts of an upload that was never finished: billed, but not an object.
+    IncompleteUpload,
 }
 
 impl VersionState {
-    pub const ALL: [VersionState; 3] = [Self::Current, Self::WithOldVersions, Self::Deleted];
+    pub const ALL: [VersionState; 4] = [
+        Self::Current,
+        Self::WithOldVersions,
+        Self::Deleted,
+        Self::IncompleteUpload,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Current => "Current only",
             Self::WithOldVersions => "Has old versions",
             Self::Deleted => "Deleted, old versions remain",
+            Self::IncompleteUpload => "Incomplete upload",
         }
     }
 
     fn from_flags(flags: u8) -> Option<Self> {
         let has = |kind: EntryKind| flags & version_flag(kind) != 0;
+        if has(EntryKind::IncompleteUpload) {
+            return Some(Self::IncompleteUpload);
+        }
         match (has(EntryKind::Current), has(EntryKind::Noncurrent)) {
             _ if flags == 0 => None,
             (true, false) => Some(Self::Current),
@@ -241,7 +252,7 @@ impl Tree {
                 break;
             }
             current = if is_last {
-                self.object_or_insert(current, segment)
+                self.object_or_insert(current, segment, entry.kind)
             } else {
                 self.directory_or_insert(current, segment)
             };
@@ -429,11 +440,18 @@ impl Tree {
 
     /// Reuses the folder's newest child when it is the same object (another version of
     /// the key just inserted); otherwise adds a new object node.
-    fn object_or_insert(&mut self, parent: NodeId, name: &str) -> NodeId {
+    /// An incomplete upload is never merged with a real object of the same key (or the
+    /// other way round), so it keeps its own node and stays visible.
+    fn object_or_insert(&mut self, parent: NodeId, name: &str, kind: EntryKind) -> NodeId {
         let newest = self.node(parent).first_child;
         if newest != NONE {
             let newest = NodeId(newest);
-            if self.node(newest).kind == NodeKind::Object && self.name(newest) == name {
+            let node = self.node(newest);
+            let is_upload = |flags: u8| flags & version_flag(EntryKind::IncompleteUpload) != 0;
+            if node.kind == NodeKind::Object
+                && self.name(newest) == name
+                && is_upload(node.version_flags) == (kind == EntryKind::IncompleteUpload)
+            {
                 return newest;
             }
         }
@@ -712,6 +730,41 @@ mod tests {
         assert_eq!(
             tree.node(find(&tree, "docs/a.txt")).usage(),
             Usage::new(8, 2)
+        );
+    }
+
+    #[test]
+    fn incomplete_uploads_get_their_own_node() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("video/cut.mov", 100));
+        tree.insert(&Entry {
+            kind: EntryKind::IncompleteUpload,
+            ..entry("video/cut.mov", 40)
+        });
+        tree.insert(&Entry {
+            kind: EntryKind::IncompleteUpload,
+            ..entry("video/cut.mov", 10)
+        });
+
+        let video = find(&tree, "video/");
+        let states: Vec<_> = tree
+            .children(video)
+            .map(|child| (tree.version_state(child), tree.node(child).usage().bytes))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                (Some(VersionState::IncompleteUpload), 50),
+                (Some(VersionState::Current), 100),
+            ]
+        );
+        assert_eq!(
+            tree.usage_by_kind(EntryKind::IncompleteUpload),
+            Usage::new(50, 2)
+        );
+        assert_eq!(
+            tree.usage_by_version_state(VersionState::IncompleteUpload),
+            Usage::new(50, 2)
         );
     }
 

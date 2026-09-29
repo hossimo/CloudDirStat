@@ -105,6 +105,12 @@ If you do create an access key, give it only the permissions below.
 
 S3 charges for LIST requests (about $0.005 per 1,000 in most regions). Each request returns up to 1,000 objects, so scanning 10 million objects costs roughly $0.05.
 
+### Incomplete multipart uploads
+
+When a large upload fails or is abandoned, the parts already uploaded stay in the bucket and are billed every month, but they don't appear in normal listings or the S3 console's object list. CloudDirStat finds them on every scan: each shows up at its key's path as an **Incomplete upload** (colored in the Versions tab), the status bar and CLI report show the total, and costs are included in the estimates. A lifecycle rule with `AbortIncompleteMultipartUpload` cleans them up automatically.
+
+This uses two optional permissions. Without `s3:ListBucketMultipartUploads` the check is skipped; without `s3:ListMultipartUploadParts` uploads are listed with unknown (zero) size. Either way the scan completes and shows a warning.
+
 ### Storage cost estimates
 
 The **Cost/mo** figures (GUI columns, tooltips, and status bar; CLI report) estimate what keeping the objects stored costs per month, using the S3 list prices for the bucket's region:
@@ -127,6 +133,8 @@ The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 |---|---|---|
 | `s3:ListBucket` | yes | Listing objects and detecting the bucket region |
 | `s3:ListBucketVersions` | only with `--versions` | Noncurrent versions and delete markers |
+| `s3:ListBucketMultipartUploads` | optional | Finding incomplete multipart uploads (hidden, billed storage) |
+| `s3:ListMultipartUploadParts` | optional | Sizing those uploads (on `arn:aws:s3:::bucket/*`) |
 | `s3:ListAllMyBuckets` | only for `s3://` (all buckets) | Finding every bucket to scan them together |
 
 CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.

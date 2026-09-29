@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use clouddirstat_core::{Entry, Tree};
+use clouddirstat_core::{Entry, NodeId, NodeKind, Tree};
 use clouddirstat_providers::s3::{S3Location, S3Scanner, ScanOptions, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
@@ -26,6 +26,7 @@ pub enum ScanState {
 /// A scan running on the tokio runtime, and the tree built from what it has sent so far.
 pub struct Scan {
     pub location: S3Location,
+    pub include_versions: bool,
     pub tree: Tree,
     pub state: ScanState,
     started: Instant,
@@ -38,6 +39,7 @@ impl Scan {
         let (sender, entries) = mpsc::channel(256);
         let (outcome_sender, outcome) = oneshot::channel();
         let location = request.location.clone();
+        let include_versions = request.include_versions;
         let ctx = ctx.clone();
 
         runtime.spawn(async move {
@@ -48,12 +50,29 @@ impl Scan {
 
         Self {
             location,
+            include_versions,
             tree: Tree::new(),
             state: ScanState::Running,
             started: Instant::now(),
             entries,
             outcome,
         }
+    }
+
+    /// The folder matching the scanned prefix (the bucket root when there is none),
+    /// so views start where the user pointed rather than at a chain of parent folders.
+    pub fn root(&self) -> NodeId {
+        let mut node = Tree::ROOT;
+        let Some((folders, _)) = self.location.prefix.rsplit_once('/') else {
+            return node;
+        };
+        for name in folders.split('/') {
+            match self.tree.find_child(node, name, NodeKind::Directory) {
+                Some(child) => node = child,
+                None => break,
+            }
+        }
+        node
     }
 
     pub fn is_running(&self) -> bool {

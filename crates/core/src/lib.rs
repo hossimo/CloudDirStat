@@ -2,10 +2,10 @@ mod format;
 mod tree;
 mod treemap;
 
-use std::ops::AddAssign;
+use std::ops::{AddAssign, SubAssign};
 
 pub use format::{format_bytes, format_count};
-pub use tree::{Node, NodeId, NodeKind, Tree};
+pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
 pub use treemap::{Rect, squarify};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -18,6 +18,13 @@ impl AddAssign for Usage {
     fn add_assign(&mut self, other: Self) {
         self.bytes += other.bytes;
         self.objects += other.objects;
+    }
+}
+
+impl SubAssign for Usage {
+    fn sub_assign(&mut self, other: Self) {
+        self.bytes -= other.bytes;
+        self.objects -= other.objects;
     }
 }
 

@@ -63,7 +63,12 @@ clouddirstat-gui
 clouddirstat-gui s3://my-bucket --profile prod
 ```
 
-Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. The treemap fills in while the scan runs; each rectangle is an object, sized by bytes and colored by storage class. Hover a rectangle to see its path and size. **Stop** ends the scan and keeps the partial result.
+Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup.
+
+- **Folder list:** every prefix and object, sorted by size, with its share of the parent folder. It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
+- **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
+- **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions, or deleted objects whose old versions are still billed; needs **Versions** checked), and **Prefixes** (the largest top-level folders).
+- **Stop** ends the scan and keeps the partial result.
 
 ### Credentials
 
@@ -139,7 +144,7 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 ## Roadmap
 
 - [x] S3 scanner CLI: directory tree, storage classes, versions, LIST cost
-- [ ] Treemap GUI (egui): basic treemap done; next click-to-zoom, tree view, shading
+- [ ] Treemap GUI (egui): folder list, shaded treemap, color by class/versions/prefix done; next per-folder scan progress, zoom, largest-files list
 - [ ] Incomplete multipart uploads
 - [ ] Estimated monthly storage cost per directory
 - [ ] Instant bucket totals from CloudWatch

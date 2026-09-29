@@ -25,6 +25,43 @@ struct NameId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClassId(u16);
 
+/// What an object's versions add up to, as far as the scan saw them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionState {
+    /// Only a current version.
+    Current,
+    /// A current version plus older, noncurrent versions that are still billed.
+    WithOldVersions,
+    /// No current version: deleted (or overwritten away), but older versions remain.
+    Deleted,
+}
+
+impl VersionState {
+    pub const ALL: [VersionState; 3] = [Self::Current, Self::WithOldVersions, Self::Deleted];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Current => "Current only",
+            Self::WithOldVersions => "Has old versions",
+            Self::Deleted => "Deleted, old versions remain",
+        }
+    }
+
+    fn from_flags(flags: u8) -> Option<Self> {
+        let has = |kind: EntryKind| flags & version_flag(kind) != 0;
+        match (has(EntryKind::Current), has(EntryKind::Noncurrent)) {
+            _ if flags == 0 => None,
+            (true, false) => Some(Self::Current),
+            (true, true) => Some(Self::WithOldVersions),
+            (false, _) => Some(Self::Deleted),
+        }
+    }
+}
+
+fn version_flag(kind: EntryKind) -> u8 {
+    1 << kind as u8
+}
+
 #[derive(Debug)]
 pub struct Node {
     name: NameId,
@@ -33,6 +70,7 @@ pub struct Node {
     children: Vec<NodeId>,
     usage: Usage,
     storage_class: Option<ClassId>,
+    version_flags: u8,
 }
 
 impl Node {
@@ -61,6 +99,7 @@ pub struct Tree {
     children_by_name: HashMap<(NodeId, NameId, NodeKind), NodeId>,
     storage_classes: Vec<(String, Usage)>,
     kinds: [Usage; EntryKind::ALL.len()],
+    version_states: [Usage; VersionState::ALL.len()],
 }
 
 impl Default for Tree {
@@ -80,6 +119,7 @@ impl Tree {
             children_by_name: HashMap::new(),
             storage_classes: Vec::new(),
             kinds: Default::default(),
+            version_states: Default::default(),
         };
         let root_name = tree.intern("");
         tree.nodes.push(Node {
@@ -89,6 +129,7 @@ impl Tree {
             children: Vec::new(),
             usage: Usage::default(),
             storage_class: None,
+            version_flags: 0,
         });
         tree
     }
@@ -118,13 +159,31 @@ impl Tree {
         }
 
         let class = self.add_storage_class_usage(&entry.storage_class, usage);
-        let node = &mut self.nodes[current.index()];
-        if node.kind == NodeKind::Object
-            && (entry.kind == EntryKind::Current || node.storage_class.is_none())
-        {
-            node.storage_class = Some(class);
+        if self.nodes[current.index()].kind == NodeKind::Object {
+            self.update_object(current, entry, class, usage);
         }
         self.kinds[entry.kind as usize] += usage;
+    }
+
+    fn update_object(&mut self, id: NodeId, entry: &Entry, class: ClassId, added: Usage) {
+        let node = &mut self.nodes[id.index()];
+        if entry.kind == EntryKind::Current || node.storage_class.is_none() {
+            node.storage_class = Some(class);
+        }
+
+        let old_state = VersionState::from_flags(node.version_flags);
+        node.version_flags |= version_flag(entry.kind);
+        let new_state = VersionState::from_flags(node.version_flags);
+        let usage = node.usage;
+
+        if let Some(old) = old_state {
+            let mut previous = usage;
+            previous -= added;
+            self.version_states[old as usize] -= previous;
+        }
+        if let Some(new) = new_state {
+            self.version_states[new as usize] += usage;
+        }
     }
 
     pub fn node(&self, id: NodeId) -> &Node {
@@ -156,6 +215,21 @@ impl Tree {
     pub fn storage_class(&self, id: NodeId) -> Option<&str> {
         let class = self.node(id).storage_class?;
         Some(&self.storage_classes[usize::from(class.0)].0)
+    }
+
+    /// `None` for directories.
+    pub fn version_state(&self, id: NodeId) -> Option<VersionState> {
+        VersionState::from_flags(self.node(id).version_flags)
+    }
+
+    /// Total usage of objects in each [`VersionState`].
+    pub fn usage_by_version_state(&self, state: VersionState) -> Usage {
+        self.version_states[state as usize]
+    }
+
+    pub fn find_child(&self, parent: NodeId, name: &str, kind: NodeKind) -> Option<NodeId> {
+        let name = *self.name_ids.get(name)?;
+        self.children_by_name.get(&(parent, name, kind)).copied()
     }
 
     pub fn total(&self) -> Usage {
@@ -215,6 +289,7 @@ impl Tree {
             children: Vec::new(),
             usage: Usage::default(),
             storage_class: None,
+            version_flags: 0,
         });
         self.nodes[parent.index()].children.push(id);
         self.children_by_name.insert((parent, name, kind), id);
@@ -354,6 +429,76 @@ mod tests {
         );
         assert_eq!(tree.storage_class(find(&tree, "b.bin")), Some("GLACIER"));
         assert_eq!(tree.storage_class(find(&tree, "a/")), None);
+    }
+
+    #[test]
+    fn version_states_follow_each_object() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("plain", 10));
+        tree.insert(&entry("edited", 20));
+        tree.insert(&Entry {
+            kind: EntryKind::Noncurrent,
+            ..entry("edited", 5)
+        });
+        tree.insert(&Entry {
+            kind: EntryKind::Noncurrent,
+            ..entry("gone", 7)
+        });
+        tree.insert(&Entry {
+            kind: EntryKind::DeleteMarker,
+            ..entry("gone", 0)
+        });
+
+        assert_eq!(
+            tree.version_state(find(&tree, "plain")),
+            Some(VersionState::Current)
+        );
+        assert_eq!(
+            tree.version_state(find(&tree, "edited")),
+            Some(VersionState::WithOldVersions)
+        );
+        assert_eq!(
+            tree.version_state(find(&tree, "gone")),
+            Some(VersionState::Deleted)
+        );
+        assert_eq!(tree.version_state(Tree::ROOT), None);
+
+        let usage = |state| tree.usage_by_version_state(state);
+        assert_eq!(
+            usage(VersionState::Current),
+            Usage {
+                bytes: 10,
+                objects: 1
+            }
+        );
+        assert_eq!(
+            usage(VersionState::WithOldVersions),
+            Usage {
+                bytes: 25,
+                objects: 2
+            }
+        );
+        assert_eq!(
+            usage(VersionState::Deleted),
+            Usage {
+                bytes: 7,
+                objects: 2
+            }
+        );
+    }
+
+    #[test]
+    fn finds_children_by_name() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("logs/2024/a.log", 1));
+
+        let logs = tree.find_child(Tree::ROOT, "logs", NodeKind::Directory);
+        assert_eq!(logs, Some(find(&tree, "logs/")));
+        assert_eq!(tree.find_child(Tree::ROOT, "logs", NodeKind::Object), None);
+        assert_eq!(
+            tree.find_child(Tree::ROOT, "missing", NodeKind::Directory),
+            None
+        );
     }
 
     #[test]

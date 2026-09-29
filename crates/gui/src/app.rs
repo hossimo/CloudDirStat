@@ -1,17 +1,21 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use clouddirstat_core::{Tree, format_bytes, format_count};
+use clouddirstat_core::{NodeId, format_bytes, format_count};
 use clouddirstat_providers::s3::S3Location;
-use eframe::egui::{self, Color32};
+use eframe::egui;
 use tokio::runtime::Runtime;
 
-use crate::palette;
+use crate::legend;
+use crate::palette::{ColorMode, Colors};
 use crate::scan::{Scan, ScanRequest, ScanState};
+use crate::tree_view::TreeView;
 use crate::treemap_view::TreemapView;
 
 /// Time per frame spent moving scanned entries into the tree.
 const INSERT_BUDGET: Duration = Duration::from_millis(8);
 const SCANNING_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
+/// While a scan is adding entries, re-sort the views at most this often.
+const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct App {
     runtime: Runtime,
@@ -20,7 +24,46 @@ pub struct App {
     include_versions: bool,
     input_error: Option<String>,
     scan: Option<Scan>,
+    view: View,
+}
+
+/// Everything shown for the current scan. Replaced wholesale when a new scan starts.
+struct View {
+    color_mode: ColorMode,
+    colors: Option<Colors>,
+    selected: Option<NodeId>,
+    tree_view: TreeView,
     treemap: TreemapView,
+    changed: bool,
+    refreshed_at: Option<Instant>,
+}
+
+impl View {
+    fn new(color_mode: ColorMode) -> Self {
+        Self {
+            color_mode,
+            colors: None,
+            selected: None,
+            tree_view: TreeView::default(),
+            treemap: TreemapView::default(),
+            changed: true,
+            refreshed_at: None,
+        }
+    }
+
+    fn refresh(&mut self, scan: &Scan) {
+        let due = self
+            .refreshed_at
+            .is_none_or(|at| at.elapsed() >= REFRESH_INTERVAL);
+        if !self.changed || (scan.is_running() && !due) {
+            return;
+        }
+        self.colors = Some(Colors::new(self.color_mode, &scan.tree, scan.root()));
+        self.tree_view.invalidate();
+        self.treemap.invalidate();
+        self.changed = false;
+        self.refreshed_at = Some(Instant::now());
+    }
 }
 
 impl App {
@@ -38,7 +81,7 @@ impl App {
             include_versions,
             input_error: None,
             scan: None,
-            treemap: TreemapView::default(),
+            view: View::new(ColorMode::StorageClass),
         };
         if let Some(request) = initial_scan {
             app.location_input = request.location.to_string();
@@ -49,7 +92,7 @@ impl App {
 
     fn start_scan(&mut self, request: ScanRequest, ctx: &egui::Context) {
         self.input_error = None;
-        self.treemap.reset();
+        self.view = View::new(self.view.color_mode);
         self.scan = Some(Scan::start(&self.runtime, request, ctx));
     }
 
@@ -153,50 +196,74 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(scan) = &mut self.scan {
             if scan.poll(INSERT_BUDGET) {
-                self.treemap.invalidate();
+                self.view.changed = true;
             }
             if scan.is_running() {
                 ui.ctx().request_repaint_after(SCANNING_REPAINT_INTERVAL);
             }
+            self.view.refresh(scan);
         }
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        if let Some(scan) = &self.scan {
-            egui::Panel::right("legend")
-                .default_size(240.0)
-                .show(ui, |ui| legend(ui, &scan.tree));
-        }
-        egui::CentralPanel::default().show(ui, |ui| match &self.scan {
-            Some(scan) => self.treemap.show(ui, &scan.tree),
-            None => {
+
+        let Some(scan) = &self.scan else {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| ui.weak("No scan yet"));
-            }
-        });
-    }
-}
+            });
+            return;
+        };
+        let view = &mut self.view;
+        let Some(colors) = &view.colors else {
+            return;
+        };
+        let tree = &scan.tree;
+        let root = scan.root();
 
-fn legend(ui: &mut egui::Ui, tree: &Tree) {
-    ui.heading("Storage classes");
-    let total = tree.total().bytes.max(1);
-    egui::Grid::new("storage_classes")
-        .num_columns(3)
-        .striped(true)
-        .show(ui, |ui| {
-            for (class, usage) in tree.storage_classes() {
-                ui.horizontal(|ui| {
-                    swatch(ui, palette::storage_class(class));
-                    ui.label(class);
+        if !scan.is_running() {
+            let height = ui.available_height() * 0.55;
+            egui::Panel::bottom("treemap")
+                .resizable(true)
+                .default_size(height)
+                .show(ui, |ui| {
+                    if let Some(clicked) = view.treemap.show(ui, tree, root, colors, view.selected)
+                    {
+                        view.selected = Some(clicked);
+                        view.tree_view.reveal(tree, clicked);
+                    }
                 });
-                ui.label(format_bytes(usage.bytes));
-                ui.label(format!("{:.1}%", usage.bytes as f64 * 100.0 / total as f64));
-                ui.end_row();
-            }
-        });
-}
+        }
 
-fn swatch(ui: &mut egui::Ui, color: Color32) {
-    let size = egui::vec2(12.0, 12.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, 2.0, color);
+        let mut color_mode = view.color_mode;
+        egui::Panel::right("legend")
+            .resizable(true)
+            .default_size(340.0)
+            .show(ui, |ui| {
+                legend::show(
+                    ui,
+                    tree,
+                    root,
+                    &mut color_mode,
+                    colors,
+                    scan.include_versions,
+                );
+            });
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            view.tree_view.show(
+                ui,
+                tree,
+                root,
+                &scan.location.to_string(),
+                colors,
+                &mut view.selected,
+            );
+        });
+
+        if color_mode != view.color_mode {
+            view.color_mode = color_mode;
+            view.changed = true;
+            view.refreshed_at = None;
+        }
+    }
 }

@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod cushion;
+mod legend;
 mod palette;
 mod scan;
+mod tree_view;
 mod treemap_view;
 
 use anyhow::{Result, anyhow};

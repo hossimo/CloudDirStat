@@ -1,5 +1,7 @@
 # CloudDirStat
 
+[![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
+
 WinDirStat for cloud object storage. Find out what is using the space (and the money) in your buckets.
 
 CloudDirStat lists a bucket, rebuilds a folder tree from the object keys, and shows where the bytes are: by directory, by storage class, and by version state (current, noncurrent, delete markers).

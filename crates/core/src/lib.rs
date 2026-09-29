@@ -1,10 +1,12 @@
 mod format;
 mod tree;
+mod treemap;
 
 use std::ops::AddAssign;
 
 pub use format::{format_bytes, format_count};
 pub use tree::{Node, NodeId, NodeKind, Tree};
+pub use treemap::{Rect, squarify};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {

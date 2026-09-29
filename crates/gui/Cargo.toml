@@ -12,7 +12,11 @@ clouddirstat-providers = { path = "../providers" }
 # glow (OpenGL) instead of the default wgpu renderer keeps the binary several MB smaller.
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui_extras = { version = "0.36.2", default-features = false }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time"] }
+
+[features]
+# Scans made-up demo buckets instead of AWS, for screenshots. Never in release builds.
+demo = ["clouddirstat-core/demo"]
 
 # Build-time only: embeds icons/clouddirstat.ico into the Windows executable.
 [target.'cfg(windows)'.build-dependencies]

@@ -5,3 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+
+[features]
+# Made-up buckets and objects for screenshots and benchmarks. Never in release builds.
+demo = []
+
+[[example]]
+name = "memory"
+required-features = ["demo"]

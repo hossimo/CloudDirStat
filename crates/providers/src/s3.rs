@@ -13,6 +13,7 @@ use aws_sdk_s3::config::ProvideCredentials;
 use aws_sdk_s3::error::DisplayErrorContext;
 use aws_sdk_s3::types::CommonPrefix;
 use clouddirstat_core::{Entry, EntryKind};
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
@@ -25,8 +26,9 @@ use crate::{Error, Result};
 const LIST_PRICE_PER_1000_USD: f64 = 0.005;
 const DEFAULT_STORAGE_CLASS: &str = "STANDARD";
 const MAX_SPLIT_DEPTH: usize = 3;
-/// Buckets listed at the same time in an all-buckets scan.
-const BUCKETS_AT_ONCE: usize = 4;
+/// Buckets in progress at the same time in an all-buckets scan. They share the
+/// request slots, so a big bucket gets all of them once the small ones are done.
+const BUCKETS_AT_ONCE: usize = 16;
 
 pub type EntrySender = Sender<Vec<Entry>>;
 
@@ -136,12 +138,14 @@ impl S3Scanner {
 
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
         let requests = Arc::new(AtomicU64::new(self.setup_requests));
+        let slots = Arc::new(Semaphore::new(options.concurrency.max(1)));
         let lister = |target: &Target, key_prefix: String| Lister {
             client: target.client.clone(),
             bucket: target.bucket.clone(),
             key_prefix,
             include_versions: options.include_versions,
             requests: Arc::clone(&requests),
+            slots: Arc::clone(&slots),
             sink: sink.clone(),
         };
         let mut skipped = self.skipped.clone();
@@ -152,7 +156,6 @@ impl S3Scanner {
                 scan_bucket(lister(target, String::new()), prefix, options.concurrency).await?;
             }
         } else {
-            let per_bucket = (options.concurrency / BUCKETS_AT_ONCE).max(1);
             let mut tasks = JoinSet::new();
             for target in &self.targets {
                 if tasks.len() >= BUCKETS_AT_ONCE
@@ -162,8 +165,12 @@ impl S3Scanner {
                 }
                 let lister = lister(target, format!("{}/", target.bucket));
                 let bucket = target.bucket.clone();
+                let concurrency = options.concurrency;
                 tasks.spawn(async move {
-                    (bucket, scan_bucket(lister, String::new(), per_bucket).await)
+                    (
+                        bucket,
+                        scan_bucket(lister, String::new(), concurrency).await,
+                    )
                 });
             }
             while let Some(finished) = tasks.join_next().await {
@@ -282,11 +289,14 @@ struct Lister {
     key_prefix: String,
     include_versions: bool,
     requests: Arc<AtomicU64>,
+    /// Shared by every bucket in a scan: one slot per listing in progress.
+    slots: Arc<Semaphore>,
     sink: EntrySender,
 }
 
 impl Lister {
     async fn list(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
+        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
         if self.include_versions {
             self.list_versions(prefix, delimiter).await
         } else {
@@ -365,7 +375,7 @@ impl Lister {
                 storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
                 kind: EntryKind::DeleteMarker,
             });
-            self.send(versions.chain(delete_markers).collect()).await?;
+            self.send(merge_by_key(versions, delete_markers)).await?;
             subprefixes.extend(prefix_names(page.common_prefixes()));
 
             if !page.is_truncated().unwrap_or(false) {
@@ -456,6 +466,29 @@ fn request_error(
     }
 }
 
+/// S3 returns a page's versions and delete markers as two lists, each sorted by key.
+/// Merging them keeps every version of a key together, which is how the tree
+/// recognizes them as one object.
+fn merge_by_key(
+    versions: impl Iterator<Item = Entry>,
+    delete_markers: impl Iterator<Item = Entry>,
+) -> Vec<Entry> {
+    let mut versions = versions.peekable();
+    let mut delete_markers = delete_markers.peekable();
+    let mut merged = Vec::new();
+    loop {
+        let next = match (versions.peek(), delete_markers.peek()) {
+            (Some(version), Some(marker)) if marker.key < version.key => delete_markers.next(),
+            (Some(_), _) => versions.next(),
+            (None, _) => delete_markers.next(),
+        };
+        match next {
+            Some(entry) => merged.push(entry),
+            None => return merged,
+        }
+    }
+}
+
 fn prefix_names(prefixes: &[CommonPrefix]) -> impl Iterator<Item = String> + '_ {
     prefixes
         .iter()
@@ -469,4 +502,45 @@ fn to_size(size: Option<i64>) -> u64 {
 
 fn storage_class(class: Option<&str>) -> String {
     class.unwrap_or(DEFAULT_STORAGE_CLASS).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(key: &str, kind: EntryKind) -> Entry {
+        Entry {
+            key: key.to_owned(),
+            size: 1,
+            storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn delete_markers_join_their_key() {
+        let versions = [
+            entry("a", EntryKind::Noncurrent),
+            entry("c", EntryKind::Current),
+        ];
+        let markers = [
+            entry("a", EntryKind::DeleteMarker),
+            entry("b", EntryKind::DeleteMarker),
+        ];
+
+        let keys: Vec<_> = merge_by_key(versions.into_iter(), markers.into_iter())
+            .into_iter()
+            .map(|entry| (entry.key, entry.kind))
+            .collect();
+
+        assert_eq!(
+            keys,
+            [
+                ("a".to_owned(), EntryKind::Noncurrent),
+                ("a".to_owned(), EntryKind::DeleteMarker),
+                ("b".to_owned(), EntryKind::DeleteMarker),
+                ("c".to_owned(), EntryKind::Current),
+            ]
+        );
+    }
 }

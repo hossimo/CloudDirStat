@@ -2,7 +2,8 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
-use crate::{Entry, EntryKind, Pricing, Usage};
+use crate::arena::{BlockVec, TextArena};
+use crate::{Cost, Entry, EntryKind, Pricing, Usage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
@@ -19,14 +20,28 @@ pub enum NodeKind {
     Object,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct NameId(u32);
+/// Marks a missing parent, child, sibling, class, or file type in the compact node fields.
+const NONE: u32 = u32::MAX;
+const NO_CLASS: u16 = u16::MAX;
+const NO_FILE_TYPE: u16 = u16::MAX;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ClassId(u16);
+/// Where a node's name sits in [`Tree::names`]: offset in the high 48 bits, length in
+/// the low 16. Object keys are at most 1024 bytes, so 16 bits of length is plenty.
+#[derive(Clone, Copy, Debug)]
+struct NameRef(u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FileTypeId(u32);
+impl NameRef {
+    fn new(range: std::ops::Range<usize>) -> Self {
+        // Key segments are at most 1024 bytes (the S3 key limit).
+        let len = u16::try_from(range.len()).expect("name segment longer than 65535 bytes");
+        Self(((range.start as u64) << 16) | u64::from(len))
+    }
+
+    fn range(self) -> std::ops::Range<usize> {
+        let offset = (self.0 >> 16) as usize;
+        offset..offset + (self.0 & 0xffff) as usize
+    }
+}
 
 /// Longest extension counted as a file type; longer suffixes are usually part of a name
 /// (`backup.2024-01-01T12-00`), not a type.
@@ -83,45 +98,80 @@ fn version_flag(kind: EntryKind) -> u8 {
     1 << kind as u8
 }
 
+/// One folder or object. Kept to 48 bytes because a big bucket has hundreds of millions.
 #[derive(Debug)]
 pub struct Node {
-    name: NameId,
+    name: NameRef,
+    bytes: u64,
+    monthly_cost: Cost,
+    /// Saturates at u32::MAX; bucket totals are kept exactly in [`Tree::kinds`].
+    objects: u32,
+    parent: u32,
+    /// Children form a linked list, newest first: no per-node vector.
+    first_child: u32,
+    next_sibling: u32,
+    storage_class: u16,
+    file_type: u16,
     kind: NodeKind,
-    parent: Option<NodeId>,
-    children: Vec<NodeId>,
-    usage: Usage,
-    storage_class: Option<ClassId>,
-    file_type: Option<FileTypeId>,
     version_flags: u8,
 }
 
 impl Node {
+    fn new(name: NameRef, kind: NodeKind, parent: u32) -> Self {
+        Self {
+            name,
+            bytes: 0,
+            monthly_cost: Cost::ZERO,
+            objects: 0,
+            parent,
+            first_child: NONE,
+            next_sibling: NONE,
+            storage_class: NO_CLASS,
+            file_type: NO_FILE_TYPE,
+            kind,
+            version_flags: 0,
+        }
+    }
+
     pub fn kind(&self) -> NodeKind {
         self.kind
     }
 
     pub fn parent(&self) -> Option<NodeId> {
-        self.parent
+        (self.parent != NONE).then_some(NodeId(self.parent))
     }
 
-    pub fn children(&self) -> &[NodeId] {
-        &self.children
+    pub fn has_children(&self) -> bool {
+        self.first_child != NONE
     }
 
     pub fn usage(&self) -> Usage {
-        self.usage
+        Usage {
+            bytes: self.bytes,
+            objects: u64::from(self.objects),
+            monthly_cost: self.monthly_cost,
+        }
+    }
+
+    fn add(&mut self, usage: Usage) {
+        self.bytes += usage.bytes;
+        self.monthly_cost += usage.monthly_cost;
+        let objects = u32::try_from(usage.objects).unwrap_or(u32::MAX);
+        self.objects = self.objects.saturating_add(objects);
     }
 }
 
 #[derive(Debug)]
 pub struct Tree {
-    nodes: Vec<Node>,
-    names: Vec<Arc<str>>,
-    name_ids: HashMap<Arc<str>, NameId>,
-    children_by_name: HashMap<(NodeId, NameId, NodeKind), NodeId>,
+    nodes: BlockVec<Node>,
+    /// Every node's name, back to back. See [`NameRef`].
+    names: TextArena,
+    /// Folders by (parent, name hash), to find the folder for each key segment. Objects
+    /// are not indexed: see [`Tree::insert`].
+    directories: HashMap<(u32, u64), u32>,
     storage_classes: Vec<(String, Usage)>,
     file_types: Vec<(String, Usage)>,
-    file_type_ids: HashMap<String, FileTypeId>,
+    file_type_ids: HashMap<String, u16>,
     kinds: [Usage; EntryKind::ALL.len()],
     version_states: [Usage; VersionState::ALL.len()],
     pricing: Option<Arc<dyn Pricing>>,
@@ -137,30 +187,19 @@ impl Tree {
     pub const ROOT: NodeId = NodeId(0);
 
     pub fn new() -> Self {
-        let mut tree = Self {
-            nodes: Vec::new(),
-            names: Vec::new(),
-            name_ids: HashMap::new(),
-            children_by_name: HashMap::new(),
+        let mut nodes = BlockVec::new();
+        nodes.push(Node::new(NameRef::new(0..0), NodeKind::Directory, NONE));
+        Self {
+            nodes,
+            names: TextArena::default(),
+            directories: HashMap::new(),
             storage_classes: Vec::new(),
             file_types: Vec::new(),
             file_type_ids: HashMap::new(),
             kinds: Default::default(),
             version_states: Default::default(),
             pricing: None,
-        };
-        let root_name = tree.intern("");
-        tree.nodes.push(Node {
-            name: root_name,
-            kind: NodeKind::Directory,
-            parent: None,
-            children: Vec::new(),
-            usage: Usage::default(),
-            storage_class: None,
-            file_type: None,
-            version_flags: 0,
-        });
-        tree
+        }
     }
 
     /// A tree that also adds up the monthly cost of everything inserted.
@@ -175,6 +214,12 @@ impl Tree {
         self.pricing.is_some()
     }
 
+    /// Adds one object version (or delete marker) to the tree.
+    ///
+    /// Versions of the same key are merged into one object node when they arrive one
+    /// after another, as S3 listings return them. Objects are not indexed by name (that
+    /// would cost more memory than the node itself), so a version that arrives after
+    /// other objects of the same folder gets its own node.
     pub fn insert(&mut self, entry: &Entry) {
         let usage = Usage {
             bytes: entry.size,
@@ -187,7 +232,7 @@ impl Tree {
         };
 
         let mut current = Self::ROOT;
-        self.nodes[current.index()].usage += usage;
+        self.nodes[current.index()].add(usage);
 
         let mut segments = entry.key.split('/').peekable();
         while let Some(segment) = segments.next() {
@@ -195,13 +240,12 @@ impl Tree {
             if is_last && segment.is_empty() {
                 break;
             }
-            let kind = if is_last {
-                NodeKind::Object
+            current = if is_last {
+                self.object_or_insert(current, segment)
             } else {
-                NodeKind::Directory
+                self.directory_or_insert(current, segment)
             };
-            current = self.child_or_insert(current, segment, kind);
-            self.nodes[current.index()].usage += usage;
+            self.nodes[current.index()].add(usage);
         }
 
         let class = self.add_storage_class_usage(&entry.storage_class, usage);
@@ -211,19 +255,18 @@ impl Tree {
         self.kinds[entry.kind as usize] += usage;
     }
 
-    fn update_object(&mut self, id: NodeId, entry: &Entry, class: ClassId, added: Usage) {
-        let file_type = self.add_file_type_usage(self.node(id).name, added);
-        self.nodes[id.index()].file_type = Some(file_type);
-
+    fn update_object(&mut self, id: NodeId, entry: &Entry, class: u16, added: Usage) {
+        let file_type = self.add_file_type_usage(id, added);
         let node = &mut self.nodes[id.index()];
-        if entry.kind == EntryKind::Current || node.storage_class.is_none() {
-            node.storage_class = Some(class);
+        node.file_type = file_type;
+        if entry.kind == EntryKind::Current || node.storage_class == NO_CLASS {
+            node.storage_class = class;
         }
 
         let old_state = VersionState::from_flags(node.version_flags);
         node.version_flags |= version_flag(entry.kind);
         let new_state = VersionState::from_flags(node.version_flags);
-        let usage = node.usage;
+        let usage = node.usage();
 
         if let Some(old) = old_state {
             let mut previous = usage;
@@ -240,13 +283,25 @@ impl Tree {
     }
 
     pub fn name(&self, id: NodeId) -> &str {
-        &self.names[self.node(id).name.0 as usize]
+        self.names.get(self.node(id).name.range())
+    }
+
+    /// Children of a folder, newest first.
+    pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        let mut next = self.node(id).first_child;
+        std::iter::from_fn(move || {
+            (next != NONE).then(|| {
+                let child = NodeId(next);
+                next = self.node(child).next_sibling;
+                child
+            })
+        })
     }
 
     pub fn path(&self, id: NodeId) -> String {
         let mut segments = Vec::new();
         let mut current = id;
-        while let Some(parent) = self.node(current).parent {
+        while let Some(parent) = self.node(current).parent() {
             segments.push(self.name(current));
             current = parent;
         }
@@ -262,8 +317,8 @@ impl Tree {
     /// The storage class of an object's current version (or of any version when
     /// there is no current one). `None` for directories.
     pub fn storage_class(&self, id: NodeId) -> Option<&str> {
-        let class = self.node(id).storage_class?;
-        Some(&self.storage_classes[usize::from(class.0)].0)
+        let class = self.node(id).storage_class;
+        (class != NO_CLASS).then(|| self.storage_classes[usize::from(class)].0.as_str())
     }
 
     /// `None` for directories.
@@ -277,12 +332,21 @@ impl Tree {
     }
 
     pub fn find_child(&self, parent: NodeId, name: &str, kind: NodeKind) -> Option<NodeId> {
-        let name = *self.name_ids.get(name)?;
-        self.children_by_name.get(&(parent, name, kind)).copied()
+        match kind {
+            NodeKind::Directory => self.find_directory(parent, name),
+            NodeKind::Object => self
+                .children(parent)
+                .find(|&child| self.node(child).kind == kind && self.name(child) == name),
+        }
     }
 
+    /// Everything inserted: all versions and delete markers.
     pub fn total(&self) -> Usage {
-        self.node(Self::ROOT).usage
+        let mut total = Usage::default();
+        for usage in self.kinds {
+            total += usage;
+        }
+        total
     }
 
     pub fn usage_by_kind(&self, kind: EntryKind) -> Usage {
@@ -291,8 +355,8 @@ impl Tree {
 
     /// The lowercase extension of an object (`""` for none). `None` for directories.
     pub fn file_type(&self, id: NodeId) -> Option<&str> {
-        let file_type = self.node(id).file_type?;
-        Some(&self.file_types[file_type.0 as usize].0)
+        let file_type = self.node(id).file_type;
+        (file_type != NO_FILE_TYPE).then(|| self.file_types[usize::from(file_type)].0.as_str())
     }
 
     /// Usage per file type (`""` for no extension), largest first.
@@ -317,8 +381,8 @@ impl Tree {
     }
 
     pub fn children_by_size(&self, id: NodeId) -> Vec<NodeId> {
-        let mut children = self.node(id).children.clone();
-        children.sort_by_key(|&child| Reverse(self.node(child).usage.bytes));
+        let mut children: Vec<_> = self.children(id).collect();
+        children.sort_by_key(|&child| Reverse(self.node(child).bytes));
         children
     }
 
@@ -326,7 +390,7 @@ impl Tree {
         let mut smallest_first = BinaryHeap::with_capacity(count + 1);
         for (index, node) in self.nodes.iter().enumerate() {
             if node.kind == NodeKind::Object {
-                smallest_first.push(Reverse((node.usage.bytes, NodeId(index as u32))));
+                smallest_first.push(Reverse((node.bytes, NodeId(index as u32))));
                 if smallest_first.len() > count {
                     smallest_first.pop();
                 }
@@ -337,62 +401,83 @@ impl Tree {
             .into_iter()
             .map(|Reverse((_, id))| id)
             .collect();
-        largest.sort_by_key(|&id| Reverse(self.node(id).usage.bytes));
+        largest.sort_by_key(|&id| Reverse(self.node(id).bytes));
         largest
     }
 
-    fn child_or_insert(&mut self, parent: NodeId, name: &str, kind: NodeKind) -> NodeId {
-        let name = self.intern(name);
-        if let Some(&existing) = self.children_by_name.get(&(parent, name, kind)) {
+    fn find_directory(&self, parent: NodeId, name: &str) -> Option<NodeId> {
+        match self.directories.get(&(parent.0, name_hash(name))) {
+            Some(&id) if self.name(NodeId(id)) == name => Some(NodeId(id)),
+            // Two names with the same hash: the second one is only found by searching.
+            Some(_) => self.children(parent).find(|&child| {
+                self.node(child).kind == NodeKind::Directory && self.name(child) == name
+            }),
+            None => None,
+        }
+    }
+
+    fn directory_or_insert(&mut self, parent: NodeId, name: &str) -> NodeId {
+        if let Some(existing) = self.find_directory(parent, name) {
             return existing;
         }
-
-        let id = NodeId(u32::try_from(self.nodes.len()).expect("tree exceeds u32::MAX nodes"));
-        self.nodes.push(Node {
-            name,
-            kind,
-            parent: Some(parent),
-            children: Vec::new(),
-            usage: Usage::default(),
-            storage_class: None,
-            file_type: None,
-            version_flags: 0,
-        });
-        self.nodes[parent.index()].children.push(id);
-        self.children_by_name.insert((parent, name, kind), id);
+        let id = self.add_node(parent, name, NodeKind::Directory);
+        self.directories
+            .entry((parent.0, name_hash(name)))
+            .or_insert(id.0);
         id
     }
 
-    fn add_file_type_usage(&mut self, name: NameId, usage: Usage) -> FileTypeId {
-        let file_type = file_type(&self.names[name.0 as usize]);
-        let id = match self.file_type_ids.get(&file_type) {
-            Some(&id) => id,
+    /// Reuses the folder's newest child when it is the same object (another version of
+    /// the key just inserted); otherwise adds a new object node.
+    fn object_or_insert(&mut self, parent: NodeId, name: &str) -> NodeId {
+        let newest = self.node(parent).first_child;
+        if newest != NONE {
+            let newest = NodeId(newest);
+            if self.node(newest).kind == NodeKind::Object && self.name(newest) == name {
+                return newest;
+            }
+        }
+        self.add_node(parent, name, NodeKind::Object)
+    }
+
+    fn add_node(&mut self, parent: NodeId, name: &str, kind: NodeKind) -> NodeId {
+        // Indexes are u32 to keep nodes small; NONE (u32::MAX) is reserved.
+        let id = u32::try_from(self.nodes.len())
+            .ok()
+            .filter(|&id| id != NONE)
+            .expect("tree exceeds u32::MAX - 1 nodes");
+        let name_ref = NameRef::new(self.names.push(name));
+
+        let mut node = Node::new(name_ref, kind, parent.0);
+        let parent_node = &mut self.nodes[parent.index()];
+        node.next_sibling = parent_node.first_child;
+        parent_node.first_child = id;
+        self.nodes.push(node);
+        NodeId(id)
+    }
+
+    fn add_file_type_usage(&mut self, id: NodeId, usage: Usage) -> u16 {
+        let mut file_type = file_type(self.name(id));
+        // Past 65534 distinct types, new ones count as "no extension".
+        if !self.file_type_ids.contains_key(&file_type)
+            && self.file_types.len() >= usize::from(NO_FILE_TYPE)
+        {
+            file_type = String::new();
+        }
+        let index = match self.file_type_ids.get(&file_type) {
+            Some(&index) => index,
             None => {
-                let id = FileTypeId(
-                    u32::try_from(self.file_types.len()).expect("tree exceeds u32::MAX file types"),
-                );
+                let index = self.file_types.len() as u16;
                 self.file_types.push((file_type.clone(), Usage::default()));
-                self.file_type_ids.insert(file_type, id);
-                id
+                self.file_type_ids.insert(file_type, index);
+                index
             }
         };
-        self.file_types[id.0 as usize].1 += usage;
-        id
+        self.file_types[usize::from(index)].1 += usage;
+        index
     }
 
-    fn intern(&mut self, name: &str) -> NameId {
-        if let Some(&id) = self.name_ids.get(name) {
-            return id;
-        }
-
-        let id = NameId(u32::try_from(self.names.len()).expect("tree exceeds u32::MAX names"));
-        let name: Arc<str> = Arc::from(name);
-        self.names.push(Arc::clone(&name));
-        self.name_ids.insert(name, id);
-        id
-    }
-
-    fn add_storage_class_usage(&mut self, class: &str, usage: Usage) -> ClassId {
+    fn add_storage_class_usage(&mut self, class: &str, usage: Usage) -> u16 {
         let index = match self
             .storage_classes
             .iter()
@@ -406,8 +491,16 @@ impl Tree {
             }
         };
         self.storage_classes[index].1 += usage;
-        ClassId(u16::try_from(index).expect("more than u16::MAX distinct storage classes"))
+        // There are about ten storage classes; u16 leaves room for any provider.
+        u16::try_from(index).expect("more than 65534 distinct storage classes")
     }
+}
+
+/// FNV-1a: fast, and good enough to key the folder index (matches are verified).
+fn name_hash(name: &str) -> u64 {
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 #[cfg(test)]
@@ -441,7 +534,7 @@ mod tests {
         assert_eq!(tree.total(), Usage::new(180, 4));
         assert_eq!(tree.node(find(&tree, "logs/")).usage().bytes, 175);
         assert_eq!(tree.node(find(&tree, "logs/2024/")).usage().objects, 2);
-        assert_eq!(tree.node(Tree::ROOT).children().len(), 2);
+        assert_eq!(tree.children(Tree::ROOT).count(), 2);
     }
 
     #[test]
@@ -452,7 +545,7 @@ mod tests {
 
         let photos = find(&tree, "photos/");
         assert_eq!(tree.node(photos).usage(), Usage::new(10, 2));
-        assert_eq!(tree.node(photos).children().len(), 1);
+        assert_eq!(tree.children(photos).count(), 1);
     }
 
     #[test]
@@ -461,7 +554,7 @@ mod tests {
         tree.insert(&entry("data", 1));
         tree.insert(&entry("data/part-0", 2));
 
-        assert_eq!(tree.node(Tree::ROOT).children().len(), 2);
+        assert_eq!(tree.children(Tree::ROOT).count(), 2);
         assert_eq!(tree.node(find(&tree, "data")).kind(), NodeKind::Object);
         assert_eq!(tree.node(find(&tree, "data/")).kind(), NodeKind::Directory);
     }
@@ -597,6 +690,29 @@ mod tests {
         assert_eq!(file_type("README"), "");
         assert_eq!(file_type("backup.2024-01-01T12-00"), "");
         assert_eq!(file_type("name.averyveryverylongsuffix"), "");
+    }
+
+    #[test]
+    fn nodes_stay_small() {
+        assert!(std::mem::size_of::<Node>() <= 48);
+    }
+
+    #[test]
+    fn merges_versions_that_arrive_together() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("docs/a.txt", 5));
+        tree.insert(&Entry {
+            kind: EntryKind::Noncurrent,
+            ..entry("docs/a.txt", 3)
+        });
+        tree.insert(&entry("docs/b.txt", 1));
+
+        let docs = find(&tree, "docs/");
+        assert_eq!(tree.children(docs).count(), 2);
+        assert_eq!(
+            tree.node(find(&tree, "docs/a.txt")).usage(),
+            Usage::new(8, 2)
+        );
     }
 
     #[test]

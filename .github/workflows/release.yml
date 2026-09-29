@@ -1,0 +1,96 @@
+name: Release
+
+# Publishing a GitHub release builds both binaries for every platform and attaches
+# them to that release. Run it by hand to rebuild an existing release's assets
+# (give its tag), or to test the build without a release (leave the tag empty).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach to (empty = build only)"
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          # Built on an older Ubuntu so the binaries also run on older glibc versions.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG || github.ref }}
+          # Full history and tags, so the version comes from the release tag.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          name="clouddirstat-${TAG:-dev}-$target"
+          ext=""
+          if [[ "$target" == *windows* ]]; then ext=".exe"; fi
+
+          mkdir -p "dist/$name"
+          cp "target/$target/release/clouddirstat$ext" \
+             "target/$target/release/clouddirstat-gui$ext" \
+             README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+
+          cd dist
+          if [[ "$ext" == ".exe" ]]; then
+            archive="$name.zip"
+            pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$archive'"
+          else
+            archive="$name.tar.gz"
+            tar -czf "$archive" "$name"
+          fi
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          rm -rf "$name"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'release' || inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

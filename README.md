@@ -127,6 +127,22 @@ The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 
 CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
 
+## Download
+
+Prebuilt binaries for Windows, macOS, and Linux (x64 and ARM64) are attached to each [release](https://github.com/hossimo/CloudDirStat/releases). Each archive contains `clouddirstat` (CLI) and `clouddirstat-gui`, plus a `.sha256` checksum file next to it.
+
+The binaries are not code-signed yet. On macOS, clear the download quarantine before the first run:
+
+```sh
+xattr -d com.apple.quarantine clouddirstat clouddirstat-gui
+```
+
+On Windows, SmartScreen may warn about an unrecognized app; choose **More info → Run anyway**.
+
+### Making a release
+
+Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets and attaches the archives to the release. To rebuild the files for an existing release, run the workflow manually from the Actions tab with that tag; with no tag it only builds, which is handy for testing.
+
 ## Building from source
 
 1. Install Rust with [rustup](https://rustup.rs). On Windows you also need the Visual Studio C++ Build Tools.

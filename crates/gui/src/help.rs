@@ -5,12 +5,16 @@ const POLICY_TEMPLATE: &str = include_str!("../../../docs/iam-policy.json");
 const BUCKET_PLACEHOLDER: &str = "YOUR-BUCKET";
 
 const TITLE: &str = "CloudDirStat: permissions and credentials";
+/// Drawn at half size so it stays sharp on high-DPI screens.
+const LOGO_PNG: &[u8] = include_bytes!("../../../icons/png/icon-128.png");
+const LOGO_SIZE: f32 = 64.0;
 
 /// The Help window: which permissions a scan needs and how to sign in. Opens as its own
 /// OS window, so it can be moved and sized independently of the main window.
 #[derive(Default)]
 pub struct HelpWindow {
     open: bool,
+    logo: Option<egui::TextureHandle>,
 }
 
 impl HelpWindow {
@@ -24,6 +28,10 @@ impl HelpWindow {
             return;
         }
         let policy = policy_for(bucket);
+        if self.logo.is_none() {
+            self.logo = load_logo(ctx);
+        }
+        let logo = self.logo.as_ref();
         let builder = crate::with_app_icon(egui::ViewportBuilder::default())
             .with_title(TITLE)
             .with_inner_size([600.0, 640.0])
@@ -35,11 +43,11 @@ impl HelpWindow {
             |ui, class| {
                 if class == egui::ViewportClass::EmbeddedWindow {
                     // No OS windows on this platform: egui shows it inside the main window.
-                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy));
+                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy, logo));
                     return false;
                 }
                 egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy));
+                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy, logo));
                 });
                 ui.input(|input| input.viewport().close_requested())
             },
@@ -50,8 +58,8 @@ impl HelpWindow {
     }
 }
 
-fn contents(ui: &mut egui::Ui, policy: &str) {
-    about(ui);
+fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>) {
+    about(ui, logo);
     ui.separator();
     ui.heading("Permissions");
     ui.label(
@@ -120,22 +128,39 @@ fn contents(ui: &mut egui::Ui, policy: &str) {
     );
 }
 
-fn about(ui: &mut egui::Ui) {
+fn about(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
     ui.horizontal(|ui| {
-        ui.heading("CloudDirStat");
-        ui.label(format!("version {}", clouddirstat_core::VERSION));
-    });
-    ui.horizontal(|ui| {
-        ui.weak(format!("commit {}", clouddirstat_core::GIT_HASH));
-        if ui
-            .small_button("Copy")
-            .on_hover_text("Copy the version and commit, e.g. for a bug report")
-            .clicked()
-        {
-            ui.ctx()
-                .copy_text(format!("CloudDirStat {}", clouddirstat_core::LONG_VERSION));
+        if let Some(logo) = logo {
+            let size = egui::vec2(LOGO_SIZE, LOGO_SIZE);
+            ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                logo.id(),
+                size,
+            )));
         }
+        ui.vertical(|ui| {
+            ui.heading("CloudDirStat");
+            ui.label(format!("version {}", clouddirstat_core::VERSION));
+            ui.horizontal(|ui| {
+                ui.weak(format!("commit {}", clouddirstat_core::GIT_HASH));
+                if ui
+                    .small_button("Copy")
+                    .on_hover_text("Copy the version and commit, e.g. for a bug report")
+                    .clicked()
+                {
+                    ui.ctx()
+                        .copy_text(format!("CloudDirStat {}", clouddirstat_core::LONG_VERSION));
+                }
+            });
+        });
     });
+}
+
+/// A broken logo file only costs the logo.
+fn load_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let icon = eframe::icon_data::from_png_bytes(LOGO_PNG).ok()?;
+    let size = [icon.width as usize, icon.height as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
+    Some(ctx.load_texture("logo", image, egui::TextureOptions::LINEAR))
 }
 
 fn policy_for(bucket: Option<&str>) -> String {

@@ -129,7 +129,7 @@ CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
 
 ## Download
 
-Prebuilt binaries for Windows, macOS, and Linux (x64 and ARM64) are attached to each [release](https://github.com/hossimo/CloudDirStat/releases). Each archive contains `clouddirstat` (CLI) and `clouddirstat-gui`, plus a `.sha256` checksum file next to it.
+Prebuilt binaries for Windows, macOS, and Linux (x64 and ARM64) are attached to each [release](https://github.com/hossimo/CloudDirStat/releases). Each archive contains `clouddirstat` (CLI) and `clouddirstat-gui`.
 
 The binaries are not code-signed yet. On macOS, clear the download quarantine before the first run:
 

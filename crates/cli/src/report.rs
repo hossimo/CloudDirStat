@@ -137,9 +137,24 @@ impl Report<'_> {
         );
     }
 
+    /// The largest objects overall, or the largest in each bucket for `s3://`.
     fn print_largest_objects(&self) {
-        section("Largest objects");
-        for id in self.tree.largest_objects(self.options.top) {
+        if !self.location.is_all_buckets() {
+            section("Largest objects");
+            self.print_objects(self.tree.largest_objects(self.options.top));
+            return;
+        }
+        section("Largest objects per bucket");
+        for bucket in self.tree.children_by_size(Tree::ROOT) {
+            if self.tree.node(bucket).kind() == NodeKind::Directory {
+                println!("  {}", self.tree.name(bucket));
+                self.print_objects(self.tree.largest_objects_in(bucket, self.options.top));
+            }
+        }
+    }
+
+    fn print_objects(&self, objects: Vec<NodeId>) {
+        for id in objects {
             let usage = self.tree.node(id).usage();
             println!(
                 "  {:>10} {:>12}/mo  {}",

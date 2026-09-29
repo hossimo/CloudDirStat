@@ -397,17 +397,40 @@ impl Tree {
         children
     }
 
+    /// The `count` largest objects in the whole tree, largest first.
     pub fn largest_objects(&self, count: usize) -> Vec<NodeId> {
-        let mut smallest_first = BinaryHeap::with_capacity(count + 1);
-        for (index, node) in self.nodes.iter().enumerate() {
-            if node.kind == NodeKind::Object {
-                smallest_first.push(Reverse((node.bytes, NodeId(index as u32))));
-                if smallest_first.len() > count {
-                    smallest_first.pop();
+        let objects = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.kind == NodeKind::Object)
+            .map(|(index, _)| NodeId(index as u32));
+        self.largest_of(objects, count)
+    }
+
+    /// The `count` largest objects anywhere under `root`, largest first.
+    pub fn largest_objects_in(&self, root: NodeId, count: usize) -> Vec<NodeId> {
+        let mut pending = vec![root];
+        let objects = std::iter::from_fn(move || {
+            while let Some(id) = pending.pop() {
+                match self.node(id).kind {
+                    NodeKind::Object => return Some(id),
+                    NodeKind::Directory => pending.extend(self.children(id)),
                 }
             }
-        }
+            None
+        });
+        self.largest_of(objects, count)
+    }
 
+    fn largest_of(&self, objects: impl Iterator<Item = NodeId>, count: usize) -> Vec<NodeId> {
+        let mut smallest_first = BinaryHeap::with_capacity(count + 1);
+        for id in objects {
+            smallest_first.push(Reverse((self.node(id).bytes, id)));
+            if smallest_first.len() > count {
+                smallest_first.pop();
+            }
+        }
         let mut largest: Vec<_> = smallest_first
             .into_iter()
             .map(|Reverse((_, id))| id)
@@ -780,6 +803,22 @@ mod tests {
             tree.find_child(Tree::ROOT, "missing", NodeKind::Directory),
             None
         );
+    }
+
+    #[test]
+    fn largest_objects_in_a_folder() {
+        let mut tree = Tree::new();
+        for (key, size) in [("a/x", 5), ("a/b/y", 50), ("a/z", 20), ("c/w", 99)] {
+            tree.insert(&entry(key, size));
+        }
+
+        let paths: Vec<_> = tree
+            .largest_objects_in(find(&tree, "a/"), 2)
+            .into_iter()
+            .map(|id| tree.path(id))
+            .collect();
+        assert_eq!(paths, ["a/b/y", "a/z"]);
+        assert_eq!(tree.largest_objects_in(find(&tree, "c/w"), 5).len(), 1);
     }
 
     #[test]

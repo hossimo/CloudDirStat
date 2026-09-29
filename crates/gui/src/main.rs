@@ -6,6 +6,7 @@ mod cushion;
 #[cfg(feature = "demo")]
 mod demo_scan;
 mod help;
+mod largest_files;
 mod legend;
 mod palette;
 mod scan;

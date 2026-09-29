@@ -147,6 +147,10 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 - [ ] Azure Blob Storage
 - [ ] Google Cloud Storage
 
+## AI Disclosure
+
+Parts of this project are developed with AI assistance (Claude). All code is reviewed, tested, and owned by the maintainer.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

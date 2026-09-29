@@ -36,7 +36,7 @@ clouddirstat scan s3://                      # every bucket, each as a top-level
 | `--region <REGION>` | auto | Bucket region. Detected automatically when omitted |
 | `--versions` | off | Include noncurrent versions and delete markers (needs `s3:ListBucketVersions`) |
 | `--depth <N>` | 2 | Directory levels to print |
-| `--top <N>` | 10 | Entries per directory and in the largest-objects list |
+| `--top <N>` | 10 | Entries per directory and in the largest-objects list (per bucket for `s3://`) |
 | `--concurrency <N>` | 32 | Maximum parallel LIST requests |
 
 Example output:
@@ -77,6 +77,7 @@ clouddirstat-gui s3://my-bucket --profile prod
 Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. Use `s3://` as the location to scan every bucket at once (needs `s3:ListAllMyBuckets`); each bucket appears as a top-level folder, priced at its own region's rates, and buckets you can't list are skipped with a warning.
 
 - **Folder list:** every prefix and object, sorted by size, with its share of the parent folder. It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
+- **Largest files:** the tab next to **Folders** lists the largest files (50 by default; change the number at the top), with size, cost, storage class, and folder. When scanning all buckets it lists the largest files in each bucket, under headings you can collapse one by one or all at once. Click a file to select it; double-click to show it in the folder list.
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
 - **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions and deleted objects whose old versions are still billed, which need **Versions** checked, plus incomplete uploads, which are always found), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
 - **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details).
@@ -240,6 +241,7 @@ Done:
 - [x] Estimated monthly storage cost per folder and object, by region
 - [x] Incomplete multipart uploads
 - [x] Scan all buckets at once (`s3://`)
+- [x] Largest files list (per bucket when scanning all buckets)
 - [x] Credentials: profiles, `aws login`, IAM Identity Center, access keys
 - [x] Low memory for large buckets (~66 bytes per object)
 - [x] Release builds for Windows, macOS, and Linux (x64 and ARM64)
@@ -247,7 +249,6 @@ Done:
 Next:
 
 - [ ] Click to zoom into a folder in the treemap
-- [ ] Largest files list
 - [ ] Last modified column
 - [ ] Instant bucket totals and scan-cost estimate from CloudWatch
 - [ ] macOS app bundle and code signing

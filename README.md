@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
 
-**WinDirStat for cloud storage.** See what is using the space, and the money, in your Amazon S3, Google Cloud Storage, and Azure Blob Storage buckets.
+**CloudDirStat is like the amazing [WinDirStat](https://windirstat.net/) (not affiliated) for cloud storage.** See what is using the space, and the money, in your Amazon S3, Google Cloud Storage, and Azure Blob Storage buckets.
 
 CloudDirStat lists a bucket (or all of them), rebuilds the folder tree from the object names, and shows it as a sortable folder list and a treemap. Every folder and file shows its size and an estimated monthly cost. It breaks usage down by storage class, file type, and version, and finds storage that costs money but hides from normal listings: old versions, deleted files that are still billed, and abandoned uploads.
 
@@ -20,7 +20,7 @@ CloudDirStat lists a bucket (or all of them), rebuilds the folder tree from the 
 | **Google Cloud Storage** | **New; needs more testing.** Works with Google login, service accounts, and access tokens, but has only been tested on a small test bucket. |
 | **Azure Blob Storage** | **New; needs more testing.** Works with the Azure CLI, SAS tokens, and account keys, but has only been tested on a small test account. |
 
-The project is in early development. If a Google or Azure scan fails or shows wrong numbers, please [open an issue](https://github.com/hossimo/CloudDirStat/issues).
+The project is in early development. If a Google or Azure scan fails or shows wrong numbers, please [open an issue](https://github.com/hossimo/CloudDirStat/issues). This is a side project made possible with Claude. It's been something that I needed for years but until now I could not make a reality. 
 
 ## Safe by design
 
@@ -38,6 +38,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 - **Every bucket at once:** `s3://`, `gs://`, or `az://` scans them all into one tree.
 - **Scan cost up front:** reports what the listing itself cost; for S3, **Estimate** shows sizes and costs in seconds without listing anything.
 - **Small and fast:** one native app per platform, no runtime or browser. Lists in parallel and uses about 66 bytes of memory per object (roughly 650 MB for 10 million objects).
+- **Written in Rust:** this one is only possible for me due to using AI to build the project. I'm still learning Rust and it normally not a language I would reach for but I wanted to make this future proof and as safe as I could.
 
 ## Quick start
 

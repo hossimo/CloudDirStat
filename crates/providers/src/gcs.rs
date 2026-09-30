@@ -309,13 +309,7 @@ fn project(credentials: &GcsCredentials, auth: &TokenSource) -> Result<String> {
         .or_else(from_env)
         .or_else(|| auth.project.clone())
         .or_else(auth::gcloud_project)
-        .ok_or_else(|| {
-            Error::Credentials(
-                "gs:// lists the buckets of a Google Cloud project, but no project is set: \
-                 enter one, or run `gcloud config set project PROJECT_ID`"
-                    .to_owned(),
-            )
-        })
+        .ok_or(Error::NoProject)
 }
 
 fn record_bucket_result(

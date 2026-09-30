@@ -29,6 +29,13 @@ pub enum Error {
     #[error("{0}")]
     Unsupported(String),
 
+    #[error(
+        "gs:// scans every bucket of one Google Cloud project, but no project is set. Enter a \
+         project ID (list yours with `gcloud projects list`), or set a default with `gcloud \
+         config set project PROJECT_ID`"
+    )]
+    NoProject,
+
     #[error("scan was cancelled")]
     Cancelled,
 

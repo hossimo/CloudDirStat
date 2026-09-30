@@ -95,6 +95,29 @@ impl S3Pricing {
             .or_else(|| field(self.fallback))
             .unwrap_or(0.0)
     }
+
+    /// The per-GB-month list price of `class` (Standard for unknown classes).
+    fn rate(&self, prices: &RegionPrices, class: &str) -> f64 {
+        let field: fn(&RegionPrices) -> Option<f64> = match class {
+            "STANDARD_IA" => |p| p.standard_ia,
+            "ONEZONE_IA" => |p| p.onezone_ia,
+            "GLACIER_IR" => |p| p.glacier_ir,
+            "INTELLIGENT_TIERING" => |p| p.intelligent_tiering,
+            "GLACIER" => |p| p.glacier,
+            "DEEP_ARCHIVE" => |p| p.deep_archive,
+            "REDUCED_REDUNDANCY" => |p| p.reduced_redundancy,
+            "EXPRESS_ONEZONE" => |p| p.express_onezone,
+            _ => |p| p.standard,
+        };
+        self.price(prices, field)
+    }
+
+    /// Cost of `bytes` stored as `class` at list price, with no minimum sizes, per-object
+    /// overheads, or monitoring fees. For totals that already include overheads, like
+    /// CloudWatch's.
+    pub fn bytes_cost(&self, class: &str, bytes: u64) -> Cost {
+        Cost::from_usd(bytes as f64 / BYTES_PER_GB * self.rate(self.default, class))
+    }
 }
 
 impl Pricing for S3Pricing {
@@ -104,27 +127,17 @@ impl Pricing for S3Pricing {
         }
         let size = entry.size;
         let prices = self.prices_for(&entry.key);
-        let price = |field| self.price(prices, field);
-        let per_gb = |bytes: u64, price: f64| bytes as f64 / BYTES_PER_GB * price;
-        let standard = price(|p| p.standard);
+        let class = entry.storage_class.as_str();
+        let rate = self.rate(prices, class);
+        let per_gb = |bytes: u64| bytes as f64 / BYTES_PER_GB * rate;
 
-        let usd = match entry.storage_class.as_str() {
-            "STANDARD_IA" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.standard_ia)),
-            "ONEZONE_IA" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.onezone_ia)),
-            "GLACIER_IR" => per_gb(size.max(MINIMUM_BILLABLE_SIZE), price(|p| p.glacier_ir)),
-            "INTELLIGENT_TIERING" => {
-                let monitoring = if size >= MONITORED_SIZE {
-                    price(|p| p.int_monitoring_per_object)
-                } else {
-                    0.0
-                };
-                per_gb(size, price(|p| p.intelligent_tiering)) + monitoring
+        let usd = match class {
+            "STANDARD_IA" | "ONEZONE_IA" | "GLACIER_IR" => per_gb(size.max(MINIMUM_BILLABLE_SIZE)),
+            "INTELLIGENT_TIERING" if size >= MONITORED_SIZE => {
+                per_gb(size) + self.price(prices, |p| p.int_monitoring_per_object)
             }
-            "GLACIER" => archive(size, price(|p| p.glacier), standard),
-            "DEEP_ARCHIVE" => archive(size, price(|p| p.deep_archive), standard),
-            "REDUCED_REDUNDANCY" => per_gb(size, price(|p| p.reduced_redundancy)),
-            "EXPRESS_ONEZONE" => per_gb(size, price(|p| p.express_onezone)),
-            _ => per_gb(size, standard),
+            "GLACIER" | "DEEP_ARCHIVE" => archive(size, rate, self.rate(prices, "STANDARD")),
+            _ => per_gb(size),
         };
         Cost::from_usd(usd)
     }

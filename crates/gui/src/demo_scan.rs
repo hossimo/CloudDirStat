@@ -4,10 +4,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use clouddirstat_core::Entry;
 use clouddirstat_core::demo::{self, DemoBucket};
+use clouddirstat_core::{Date, Entry};
 use clouddirstat_providers::Error;
-use clouddirstat_providers::s3::{S3Pricing, ScanStats};
+use clouddirstat_providers::s3::{BucketEstimate, Estimate, S3Pricing, ScanStats};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::scan::ScanRequest;
@@ -17,18 +17,80 @@ const SEED: u64 = 2026;
 const BATCH: usize = 1000;
 /// Pause per batch, so the scan looks (and can be captured) in progress.
 const BATCH_DELAY: Duration = Duration::from_millis(40);
+/// The day demo "CloudWatch" figures are from: 2026-08-31.
+const DEMO_METRICS_DAY: u64 = 20_696;
+/// Metrics a real estimate requests per bucket: 25 storage types and the object count.
+const METRICS_PER_BUCKET: u64 = 26;
+
+/// Set CLOUDDIRSTAT_DEMO_OBJECTS for bigger or smaller demos.
+fn demo_objects() -> u64 {
+    std::env::var("CLOUDDIRSTAT_DEMO_OBJECTS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_OBJECTS)
+}
+
+/// What CloudWatch would report for the demo buckets: every version counted, as S3
+/// counts them.
+pub async fn estimate(request: &ScanRequest) -> clouddirstat_providers::Result<Estimate> {
+    let objects = demo_objects();
+    let location = &request.location;
+    let buckets: Vec<(&DemoBucket, u64)> = if location.is_all_buckets() {
+        demo::BUCKETS
+            .iter()
+            .map(|bucket| (bucket, demo::share(objects, bucket)))
+            .collect()
+    } else {
+        vec![(find_bucket(&location.bucket)?, objects)]
+    };
+
+    let as_of = Date::from_unix_seconds(DEMO_METRICS_DAY * 86_400);
+    let mut estimate = Estimate {
+        metrics_requested: buckets.len() as u64 * METRICS_PER_BUCKET,
+        ..Estimate::default()
+    };
+    for (bucket, share) in buckets {
+        let mut classes: Vec<(String, u64)> = Vec::new();
+        let mut count = 0;
+        for entry in bucket.entries(share, true, SEED) {
+            count += 1;
+            match classes
+                .iter_mut()
+                .find(|(name, _)| *name == entry.storage_class)
+            {
+                Some((_, bytes)) => *bytes += entry.size,
+                None => classes.push((entry.storage_class, entry.size)),
+            }
+        }
+        let classes: Vec<(&str, u64)> = classes
+            .iter()
+            .map(|(class, bytes)| (class.as_str(), *bytes))
+            .collect();
+        estimate.buckets.push(BucketEstimate::from_classes(
+            bucket.name.to_owned(),
+            bucket.region.to_owned(),
+            &classes,
+            count,
+            as_of,
+        ));
+    }
+    estimate
+        .buckets
+        .sort_by_key(|bucket| std::cmp::Reverse(bucket.bytes()));
+    Ok(estimate)
+}
 
 pub async fn run(
     request: &ScanRequest,
     pricing: oneshot::Sender<Arc<S3Pricing>>,
+    expected_objects: oneshot::Sender<u64>,
     sender: mpsc::Sender<Vec<Entry>>,
 ) -> clouddirstat_providers::Result<ScanStats> {
-    // Set CLOUDDIRSTAT_DEMO_OBJECTS for bigger or smaller demos.
-    let objects = std::env::var("CLOUDDIRSTAT_DEMO_OBJECTS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_OBJECTS);
+    let objects = demo_objects();
     let location = &request.location;
+    if location.prefix.is_empty() {
+        let _ = expected_objects.send(estimate(request).await?.objects());
+    }
     let versions = request.include_versions;
 
     let entries: Box<dyn Iterator<Item = Entry> + Send> = if location.is_all_buckets() {

@@ -36,11 +36,24 @@ impl FromStr for S3Location {
         if bucket.is_empty() {
             return Err(Error::InvalidLocation(input.to_owned()));
         }
+        if !is_bucket_name(bucket) {
+            return Err(Error::InvalidBucketName(bucket.to_owned()));
+        }
         Ok(Self {
             bucket: bucket.to_owned(),
             prefix: prefix.to_owned(),
         })
     }
+}
+
+/// Whether `name` could be a bucket. Current rules allow 3 to 63 lowercase letters,
+/// digits, dots, and hyphens; older us-east-1 buckets may also be up to 255 characters
+/// with capitals and underscores, so those are let through too.
+fn is_bucket_name(name: &str) -> bool {
+    (3..=255).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 impl fmt::Display for S3Location {
@@ -77,6 +90,20 @@ mod tests {
         assert!("".parse::<S3Location>().is_err());
         assert!("/prefix".parse::<S3Location>().is_err());
         assert!("s3:///prefix".parse::<S3Location>().is_err());
+    }
+
+    #[test]
+    fn rejects_impossible_bucket_names() {
+        for input in ["s3://i", "s3://ab/", "s3://my bucket", "s3://bucket?/x"] {
+            assert!(
+                matches!(
+                    input.parse::<S3Location>(),
+                    Err(Error::InvalidBucketName(_))
+                ),
+                "{input}"
+            );
+        }
+        assert!("s3://Legacy_Bucket".parse::<S3Location>().is_ok());
     }
 
     #[test]

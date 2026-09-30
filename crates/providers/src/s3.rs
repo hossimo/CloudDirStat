@@ -1,3 +1,4 @@
+mod cloudwatch;
 mod credentials;
 mod location;
 mod prices;
@@ -10,14 +11,17 @@ use std::sync::{Arc, Mutex};
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::ProvideCredentials;
-use aws_sdk_s3::error::DisplayErrorContext;
+use aws_sdk_s3::config::http::HttpResponse;
+use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::types::CommonPrefix;
 use clouddirstat_core::{Entry, EntryKind};
+use cloudwatch::Detail;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
+pub use cloudwatch::{BucketEstimate, Estimate, list_cost_usd};
 pub use credentials::{AccessKey, CredentialSource};
 pub use location::S3Location;
 pub use pricing::S3Pricing;
@@ -51,7 +55,7 @@ pub struct ScanStats {
 
 impl ScanStats {
     pub fn estimated_cost_usd(&self) -> f64 {
-        self.list_requests as f64 / 1000.0 * LIST_PRICE_PER_1000_USD
+        list_cost_usd(self.list_requests)
     }
 }
 
@@ -63,6 +67,7 @@ pub struct SkippedBucket {
 
 /// Lists one bucket, or every bucket the credentials can see.
 pub struct S3Scanner {
+    config: SdkConfig,
     location: S3Location,
     targets: Vec<Target>,
     skipped: Vec<SkippedBucket>,
@@ -89,6 +94,7 @@ impl S3Scanner {
         check_credentials(&config).await?;
 
         let mut scanner = Self {
+            config: config.clone(),
             location: location.clone(),
             targets: Vec::new(),
             skipped: Vec::new(),
@@ -138,6 +144,30 @@ impl S3Scanner {
                 .map_or("", |target| target.region.as_str());
             S3Pricing::for_region(region)
         }
+    }
+
+    /// Totals of each bucket from CloudWatch's daily storage metrics, without listing
+    /// (needs `cloudwatch:GetMetricData`). Always whole buckets, even for a prefix.
+    pub async fn estimate(&self) -> Result<Estimate> {
+        let targets: Vec<(String, String)> = self
+            .targets
+            .iter()
+            .map(|target| (target.bucket.clone(), target.region.clone()))
+            .collect();
+        let mut estimate = cloudwatch::fetch(&self.config, &targets, Detail::Full).await?;
+        estimate.skipped.extend(self.skipped.iter().cloned());
+        Ok(estimate)
+    }
+
+    /// Like [`S3Scanner::estimate`] but only the object counts (sizes are left empty),
+    /// for a fraction of the cost: enough to show a scan's progress.
+    pub async fn object_counts(&self) -> Result<Estimate> {
+        let targets: Vec<(String, String)> = self
+            .targets
+            .iter()
+            .map(|target| (target.bucket.clone(), target.region.clone()))
+            .collect();
+        cloudwatch::fetch(&self.config, &targets, Detail::ObjectCount).await
     }
 
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
@@ -596,8 +626,11 @@ async fn bucket_region(config: &SdkConfig, bucket: &str) -> Result<String> {
     match client.head_bucket().bucket(bucket).send().await {
         Ok(output) => Ok(output.bucket_region().unwrap_or("us-east-1").to_owned()),
         Err(error) => {
-            let redirected_region = error
-                .raw_response()
+            let response = error.raw_response();
+            if response.is_some_and(|response| response.status().as_u16() == 404) {
+                return Err(Error::NoSuchBucket(bucket.to_owned()));
+            }
+            let redirected_region = response
                 .and_then(|response| response.headers().get("x-amz-bucket-region"))
                 .map(str::to_owned);
             redirected_region.ok_or_else(|| request_error("HeadBucket", "s3:ListBucket", error))
@@ -605,16 +638,42 @@ async fn bucket_region(config: &SdkConfig, bucket: &str) -> Result<String> {
     }
 }
 
-fn request_error(
+fn request_error<E>(
     operation: &'static str,
     permission: &'static str,
-    error: impl std::error::Error,
-) -> Error {
+    error: SdkError<E, HttpResponse>,
+) -> Error
+where
+    E: ProvideErrorMetadata + std::error::Error + 'static,
+{
     Error::Request {
         operation,
         permission,
-        message: DisplayErrorContext(error).to_string(),
+        message: describe(&error),
     }
+}
+
+/// One line about a failed request: the service's error code and message when it sent
+/// them, the HTTP status when it did not (HEAD responses have no body), or the cause of
+/// a network or timeout error.
+fn describe<E>(error: &SdkError<E, HttpResponse>) -> String
+where
+    E: ProvideErrorMetadata + std::error::Error + 'static,
+{
+    match (error.code(), error.message()) {
+        (Some(code), Some(message)) => return format!("{code}: {message}"),
+        (Some(code), None) => return code.to_owned(),
+        _ => {}
+    }
+    if let Some(response) = error.raw_response() {
+        return match response.status().as_u16() {
+            400 => "HTTP 400 Bad Request".to_owned(),
+            403 => "HTTP 403 Access Denied".to_owned(),
+            404 => "HTTP 404 Not Found".to_owned(),
+            status => format!("HTTP {status}"),
+        };
+    }
+    DisplayErrorContext(error).to_string()
 }
 
 /// S3 returns a page's versions and delete markers as two lists, each sorted by key.

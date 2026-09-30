@@ -8,6 +8,7 @@ use eframe::egui;
 use tokio::runtime::Runtime;
 
 use crate::credentials_form::CredentialsForm;
+use crate::estimate_view::{self, EstimateTask};
 use crate::filter::Filter;
 use crate::help::HelpWindow;
 use crate::largest_files::{self, LargestFiles};
@@ -32,6 +33,8 @@ pub struct App {
     include_versions: bool,
     input_error: Option<String>,
     scan: Option<Scan>,
+    /// The Estimate window, while it is open.
+    estimate: Option<EstimateTask>,
     view: View,
 }
 
@@ -127,6 +130,7 @@ impl App {
             include_versions,
             input_error: None,
             scan: None,
+            estimate: None,
             view: View::new(ColorMode::StorageClass),
         };
         if let Some(request) = initial_scan {
@@ -142,27 +146,65 @@ impl App {
         self.scan = Some(Scan::start(&self.runtime, request, ctx));
     }
 
-    fn start_scan_from_inputs(&mut self, ctx: &egui::Context) {
+    /// The location, credentials, and options in the toolbar, or `None` (with the
+    /// problem shown in the status bar) when they are not valid.
+    fn request_from_inputs(&mut self) -> Option<ScanRequest> {
         let location = match self.location_input.trim().parse::<S3Location>() {
             Ok(location) => location,
             Err(error) => {
                 self.input_error = Some(error.to_string());
-                return;
+                return None;
             }
         };
         let credentials = match self.credentials.source() {
             Ok(credentials) => credentials,
             Err(error) => {
                 self.input_error = Some(error);
-                return;
+                return None;
             }
         };
-        let request = ScanRequest {
+        self.input_error = None;
+        Some(ScanRequest {
             location,
             credentials,
             include_versions: self.include_versions,
+        })
+    }
+
+    fn start_scan_from_inputs(&mut self, ctx: &egui::Context) {
+        if let Some(request) = self.request_from_inputs() {
+            self.start_scan(request, ctx);
+        }
+    }
+
+    fn start_estimate_from_inputs(&mut self, ctx: &egui::Context) {
+        if let Some(request) = self.request_from_inputs() {
+            self.estimate = Some(EstimateTask::start(&self.runtime, request, ctx));
+        }
+    }
+
+    fn estimate_window(&mut self, ctx: &egui::Context) {
+        let Some(task) = &mut self.estimate else {
+            return;
         };
-        self.start_scan(request, ctx);
+        let mut open = true;
+        let action = task.show(ctx, &mut open);
+        if !open {
+            self.estimate = None;
+        }
+        match action {
+            Some(estimate_view::Action::Scan(request)) => {
+                self.estimate = None;
+                if !self.is_scanning() {
+                    self.location_input = request.location.to_string();
+                    self.start_scan(request, ctx);
+                }
+            }
+            Some(estimate_view::Action::Choose(bucket)) => {
+                self.location_input = format!("s3://{bucket}/");
+            }
+            None => {}
+        }
     }
 
     fn is_scanning(&self) -> bool {
@@ -172,6 +214,7 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let mut submitted = false;
         let mut scan_clicked = false;
+        let mut estimate_clicked = false;
         ui.horizontal(|ui| {
             ui.label("Location");
             let location = ui.add(
@@ -196,6 +239,13 @@ impl App {
             } else {
                 scan_clicked = ui.button("Scan").clicked();
             }
+            estimate_clicked = ui
+                .button("Estimate")
+                .on_hover_text(
+                    "Bucket size, object count, monthly cost, and what a full scan would \
+                     cost, from CloudWatch without listing (needs cloudwatch:GetMetricData)",
+                )
+                .clicked();
             ui.separator();
             if ui
                 .button("Help")
@@ -209,6 +259,9 @@ impl App {
 
         if (scan_clicked || submitted) && !self.is_scanning() {
             self.start_scan_from_inputs(ui.ctx());
+        }
+        if estimate_clicked {
+            self.start_estimate_from_inputs(ui.ctx());
         }
     }
 
@@ -259,6 +312,19 @@ impl App {
                 ScanState::Running => {
                     ui.spinner();
                     ui.label(format!("Scanning {summary}  ({elapsed:.0}s)"));
+                    if let Some(expected) = scan.expected_objects {
+                        let fraction = total.objects as f32 / expected as f32;
+                        ui.add(
+                            egui::ProgressBar::new(fraction.min(0.99))
+                                .desired_width(120.0)
+                                .show_percentage(),
+                        )
+                        .on_hover_text(format!(
+                            "About {} objects in total, from CloudWatch. Its count is a \
+                             day old and includes every version, so this is approximate.",
+                            format_count(expected)
+                        ));
+                    }
                 }
                 ScanState::Finished { stats, .. } => {
                     ui.label(format!(
@@ -304,6 +370,7 @@ impl eframe::App for App {
             }
         });
         self.help.show(ui.ctx(), bucket);
+        self.estimate_window(ui.ctx());
 
         let Some(scan) = &self.scan else {
             egui::CentralPanel::default().show(ui, |ui| {

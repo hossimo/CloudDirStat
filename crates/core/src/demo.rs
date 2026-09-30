@@ -291,16 +291,20 @@ impl DemoBucket {
 /// About `objects` made-up objects spread over all [`BUCKETS`], with keys prefixed by
 /// `bucket/`, like an all-buckets scan.
 pub fn all_buckets(objects: u64, with_versions: bool, seed: u64) -> impl Iterator<Item = Entry> {
-    let total_weight: u64 = BUCKETS.iter().map(|bucket| u64::from(bucket.weight)).sum();
     BUCKETS.iter().flat_map(move |bucket| {
-        let share = objects * u64::from(bucket.weight) / total_weight;
         bucket
-            .entries(share.max(1), with_versions, seed)
+            .entries(share(objects, bucket), with_versions, seed)
             .map(move |mut entry| {
                 entry.key.insert_str(0, &format!("{}/", bucket.name));
                 entry
             })
     })
+}
+
+/// How many of `objects` go to `bucket` in [`all_buckets`].
+pub fn share(objects: u64, bucket: &DemoBucket) -> u64 {
+    let total_weight: u64 = BUCKETS.iter().map(|bucket| u64::from(bucket.weight)).sum();
+    (objects * u64::from(bucket.weight) / total_weight).max(1)
 }
 
 pub fn bucket(name: &str) -> Option<&'static DemoBucket> {

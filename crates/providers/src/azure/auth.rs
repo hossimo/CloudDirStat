@@ -2,7 +2,9 @@
 //! storage account key.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -401,10 +403,47 @@ impl CliTokens {
     }
 }
 
-fn cli_token(resource: &str) -> Result<CliToken> {
+/// Where Homebrew installs `az`. An app opened from the macOS Finder (or from some Linux
+/// desktops) searches only the system folders for programs, so `az` is looked for here
+/// when it isn't on the search path.
+const USUAL_AZ_PLACES: [&str; 3] = [
+    "/opt/homebrew/bin/az",
+    "/usr/local/bin/az",
+    "/home/linuxbrew/.linuxbrew/bin/az",
+];
+
+/// The Azure CLI to run: `az` from the search path, else from Homebrew's folders.
+fn az_program() -> PathBuf {
     // `az` is a .cmd script on Windows, which has to be named in full.
-    let program = if cfg!(windows) { "az.cmd" } else { "az" };
-    let mut command = Command::new(program);
+    if cfg!(windows) {
+        return PathBuf::from("az.cmd");
+    }
+    find_az(
+        std::env::var_os("PATH").as_deref(),
+        &USUAL_AZ_PLACES,
+        |path| path.is_file(),
+    )
+}
+
+fn find_az(
+    search_path: Option<&OsStr>,
+    places: &[&str],
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    let on_search_path = search_path
+        .is_some_and(|dirs| std::env::split_paths(dirs).any(|dir| exists(&dir.join("az"))));
+    if on_search_path {
+        return PathBuf::from("az");
+    }
+    places
+        .iter()
+        .map(PathBuf::from)
+        .find(|place| exists(place))
+        .unwrap_or_else(|| PathBuf::from("az"))
+}
+
+fn cli_token(resource: &str) -> Result<CliToken> {
+    let mut command = Command::new(az_program());
     command.args([
         "account",
         "get-access-token",
@@ -452,6 +491,30 @@ fn hide_console_window(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_az_outside_the_search_path() {
+        let installed = |places: &'static [&'static str]| {
+            move |path: &Path| places.iter().any(|place| path == Path::new(place))
+        };
+        let places = ["/opt/homebrew/bin/az", "/usr/local/bin/az"];
+        // Joined with the platform's separator (`:`, or `;` on Windows).
+        let search_path = |dirs: &[&str]| std::env::join_paths(dirs).unwrap();
+        // On the search path: run it by name.
+        let path = search_path(&["/usr/bin", "/opt/homebrew/bin"]);
+        assert_eq!(
+            find_az(Some(&path), &places, installed(&["/opt/homebrew/bin/az"])),
+            PathBuf::from("az")
+        );
+        // A Finder-launched app's search path lacks Homebrew's folder.
+        let finder = search_path(&["/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+        assert_eq!(
+            find_az(Some(&finder), &places, installed(&["/usr/local/bin/az"])),
+            PathBuf::from("/usr/local/bin/az")
+        );
+        // Not installed anywhere: `az` by name, so the error says it wasn't found.
+        assert_eq!(find_az(None, &places, installed(&[])), PathBuf::from("az"));
+    }
 
     #[test]
     fn parses_cli_tokens_with_and_without_expiry() {

@@ -1,7 +1,7 @@
 name: Release
 
-# Publishing a GitHub release builds both binaries for every platform and attaches
-# them to that release. Run it by hand to rebuild an existing release's assets
+# Publishing a GitHub release builds both binaries for every platform, plus a macOS
+# app (a universal CloudDirStat.app in a DMG), and attaches them to that release. Run it by hand to rebuild an existing release's assets
 # (give its tag), or to test the build without a release (leave the tag empty).
 on:
   release:
@@ -70,12 +70,50 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
+          name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
-  publish:
+      # The macos-app job joins the two Mac builds of the GUI into one app.
+      - if: contains(matrix.target, 'apple-darwin')
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/clouddirstat-gui
+          if-no-files-found: error
+
+  macos-app:
     needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG || github.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: gui-aarch64-apple-darwin
+          path: gui/arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: gui-x86_64-apple-darwin
+          path: gui/x86_64
+      - name: Build the app and DMG
+        run: |
+          # The app's version is the tag without its "v", or Cargo's for test builds.
+          version="${TAG#v}"
+          if [[ -z "$version" ]]; then
+            version="$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)"
+          fi
+          scripts/macos_app.sh "$version" gui/arm64/clouddirstat-gui gui/x86_64/clouddirstat-gui \
+            "dist/CloudDirStat-${TAG:-dev}-macos.dmg"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos-app
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    needs: [build, macos-app]
     if: github.event_name == 'release' || inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
@@ -84,6 +122,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: release-*
           merge-multiple: true
       - name: Attach to release
         env:

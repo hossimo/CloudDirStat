@@ -478,7 +478,13 @@ Next:
 - [ ] More testing of Google Cloud Storage and Azure on real, larger buckets
 - [ ] Estimates without scanning for Google Cloud Storage and Azure
 - [ ] Read S3 Inventory reports for billion-object buckets
-- [ ] Code signing and notarization (Mac, Windows)
+- [ ] Code signing for Mac and Windows (see below)
+
+### Code signing needs funding
+
+I want to code-sign the Mac and Windows builds, so CloudDirStat opens like any other app, without the first-start steps described in [Quick start](#quick-start) and [On a Mac](#on-a-mac). Signing isn't free, though: Apple charges a yearly membership in its Developer Program (USD 99 per year) to sign and notarize Mac apps, and Windows signing needs a code-signing certificate or signing service, which also has a yearly cost.
+
+CloudDirStat is free and open source, so I will need to find funding to cover these costs before the builds can be signed. Until then, the builds work fully; they just need the one-time workaround the first time you open them.
 
 ## AI disclosure
 

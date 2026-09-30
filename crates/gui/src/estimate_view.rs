@@ -77,7 +77,8 @@ impl EstimateTask {
     }
 
     /// Shows the window. Returns what the user did; `open` turns false when closed.
-    pub fn show(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<Action> {
+    /// `scanning` disables the Scan button while another scan runs.
+    pub fn show(&mut self, ctx: &egui::Context, open: &mut bool, scanning: bool) -> Option<Action> {
         self.poll();
         let mut action = None;
         egui::Window::new(format!("Estimate: {}", self.request.location))
@@ -102,7 +103,7 @@ impl EstimateTask {
                     }
                 }
                 State::Done(estimate) => {
-                    action = contents(ui, &self.request, estimate);
+                    action = contents(ui, &self.request, estimate, scanning);
                 }
             });
         action
@@ -121,7 +122,12 @@ async fn fetch(request: &ScanRequest) -> clouddirstat_providers::Result<Estimate
 #[cfg(feature = "demo")]
 use crate::demo_scan::estimate as fetch;
 
-fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Option<Action> {
+fn contents(
+    ui: &mut egui::Ui,
+    request: &ScanRequest,
+    estimate: &Estimate,
+    scanning: bool,
+) -> Option<Action> {
     let mut action = None;
     let as_of = estimate
         .as_of()
@@ -188,7 +194,13 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
          marker, and upload part, so a scan without Versions may list fewer.",
     );
     ui.add_space(4.0);
-    if ui.button(format!("Scan {}", request.location)).clicked() {
+    let scan = ui
+        .add_enabled(
+            !scanning,
+            egui::Button::new(format!("Scan {}", request.location)),
+        )
+        .on_disabled_hover_text("A scan is already running. Stop it first.");
+    if scan.clicked() {
         action = Some(Action::Scan(Box::new(request.clone())));
     }
     action

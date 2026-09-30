@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use clouddirstat_core::{NodeId, NodeKind, Tree, VersionState};
@@ -91,19 +92,19 @@ impl ColorMode {
 pub struct Colors {
     mode: ColorMode,
     root: NodeId,
+    /// The colored prefixes, largest first (only in [`ColorMode::Prefixes`]).
+    top_prefixes: Vec<NodeId>,
     prefixes: HashMap<NodeId, Color32>,
     file_types: HashMap<String, Color32>,
 }
 
 impl Colors {
     pub fn new(mode: ColorMode, tree: &Tree, root: NodeId) -> Self {
-        let prefixes = match mode {
-            ColorMode::Prefixes => top_prefixes(tree, root)
-                .into_iter()
-                .zip(CATEGORY_COLORS)
-                .collect(),
-            _ => HashMap::new(),
+        let top_prefixes = match mode {
+            ColorMode::Prefixes => top_prefixes(tree, root),
+            _ => Vec::new(),
         };
+        let prefixes = top_prefixes.iter().copied().zip(CATEGORY_COLORS).collect();
         let file_types = match mode {
             ColorMode::FileTypes => tree
                 .file_types()
@@ -116,6 +117,7 @@ impl Colors {
         Self {
             mode,
             root,
+            top_prefixes,
             prefixes,
             file_types,
         }
@@ -138,6 +140,12 @@ impl Colors {
         self.file_types.get(file_type).copied()
     }
 
+    /// The colored top-level prefixes, largest first, when coloring by prefix; `None`
+    /// in other modes (e.g. for the one frame after switching to the Prefixes tab).
+    pub fn top_prefixes(&self) -> Option<&[NodeId]> {
+        (self.mode == ColorMode::Prefixes).then_some(self.top_prefixes.as_slice())
+    }
+
     /// The color of `prefix` if it is one of the colored top-level prefixes.
     pub fn prefix(&self, prefix: NodeId) -> Option<Color32> {
         self.prefixes.get(&prefix).copied()
@@ -154,11 +162,19 @@ impl Colors {
     }
 }
 
-/// The largest direct children of `root` that get their own color.
+/// The largest direct children of `root` that get their own color. Picks them without
+/// sorting every child, since `root` may hold millions of objects.
 pub fn top_prefixes(tree: &Tree, root: NodeId) -> Vec<NodeId> {
-    tree.children_by_size(root)
-        .into_iter()
+    let count = CATEGORY_COLORS.len();
+    let mut folders: Vec<(NodeId, u64)> = tree
+        .children(root)
         .filter(|&child| tree.node(child).kind() == NodeKind::Directory)
-        .take(CATEGORY_COLORS.len())
-        .collect()
+        .map(|child| (child, tree.node(child).usage().bytes))
+        .collect();
+    if folders.len() > count {
+        folders.select_nth_unstable_by_key(count, |&(_, bytes)| Reverse(bytes));
+        folders.truncate(count);
+    }
+    folders.sort_by_key(|&(_, bytes)| Reverse(bytes));
+    folders.into_iter().map(|(folder, _)| folder).collect()
 }

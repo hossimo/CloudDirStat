@@ -22,6 +22,12 @@ USAGE_PREFIX = re.compile(r"^[A-Z]{2,4}\d?-")
 S3_USAGE_TYPES = {
     "standard": "TimedStorage-ByteHrs",
     "intelligent_tiering": "TimedStorage-INT-FA-ByteHrs",
+    # The other Intelligent-Tiering tiers, for CloudWatch estimates (which report
+    # bytes per tier; listings don't say which tier an object is in).
+    "int_infrequent": "TimedStorage-INT-IA-ByteHrs",
+    "int_archive_instant": "TimedStorage-INT-AIA-ByteHrs",
+    "int_archive": "TimedStorage-INT-AA-ByteHrs",
+    "int_deep_archive": "TimedStorage-INT-DAA-ByteHrs",
     "standard_ia": "TimedStorage-SIA-ByteHrs",
     "onezone_ia": "TimedStorage-ZIA-ByteHrs",
     "glacier_ir": "TimedStorage-GIR-ByteHrs",

@@ -15,12 +15,23 @@ const MONITORED_SIZE: u64 = 128 * 1024;
 const ARCHIVE_OVERHEAD: u64 = 32 * 1024;
 const ARCHIVE_INDEX_OVERHEAD: u64 = 8 * 1024;
 
+/// Intelligent-Tiering's lower tiers. Listings only say INTELLIGENT_TIERING (priced at
+/// Frequent Access), but CloudWatch reports bytes per tier, so estimates price each one.
+pub(super) const INT_INFREQUENT: &str = "INTELLIGENT_TIERING:IA";
+pub(super) const INT_ARCHIVE_INSTANT: &str = "INTELLIGENT_TIERING:AIA";
+pub(super) const INT_ARCHIVE: &str = "INTELLIGENT_TIERING:AA";
+pub(super) const INT_DEEP_ARCHIVE: &str = "INTELLIGENT_TIERING:DAA";
+
 /// List prices for one region, as generated into `prices.rs`.
 #[derive(Debug)]
 pub struct RegionPrices {
     pub region: &'static str,
     pub standard: Option<f64>,
     pub intelligent_tiering: Option<f64>,
+    pub int_infrequent: Option<f64>,
+    pub int_archive_instant: Option<f64>,
+    pub int_archive: Option<f64>,
+    pub int_deep_archive: Option<f64>,
     pub standard_ia: Option<f64>,
     pub onezone_ia: Option<f64>,
     pub glacier_ir: Option<f64>,
@@ -103,6 +114,10 @@ impl S3Pricing {
             "ONEZONE_IA" => |p| p.onezone_ia,
             "GLACIER_IR" => |p| p.glacier_ir,
             "INTELLIGENT_TIERING" => |p| p.intelligent_tiering,
+            INT_INFREQUENT => |p| p.int_infrequent,
+            INT_ARCHIVE_INSTANT => |p| p.int_archive_instant,
+            INT_ARCHIVE => |p| p.int_archive,
+            INT_DEEP_ARCHIVE => |p| p.int_deep_archive,
             "GLACIER" => |p| p.glacier,
             "DEEP_ARCHIVE" => |p| p.deep_archive,
             "REDUCED_REDUNDANCY" => |p| p.reduced_redundancy,
@@ -127,9 +142,9 @@ impl Pricing for S3Pricing {
 
     fn notes(&self) -> String {
         format!(
-            "Estimated storage cost from {} list prices (AWS Price List, {PUBLISHED}).
-             First volume tier; Intelligent-Tiering at Frequent Access rates.
-             Includes minimum billable sizes and archive overhead; excludes requests,
+            "Estimated storage cost from {} list prices (AWS Price List, {PUBLISHED}).\n\
+             First volume tier; Intelligent-Tiering at Frequent Access rates.\n\
+             Includes minimum billable sizes and archive overhead; excludes requests, \
              retrieval, data transfer, and minimum storage duration charges.",
             self.region_label()
         )

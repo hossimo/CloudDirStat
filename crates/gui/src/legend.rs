@@ -145,7 +145,11 @@ fn file_type_rows(tree: &Tree, colors: &Colors) -> Vec<LegendRow> {
 
 fn prefix_rows(tree: &Tree, root: NodeId, colors: &Colors) -> Vec<LegendRow> {
     let mut other = tree.node(root).usage();
-    let mut rows: Vec<LegendRow> = palette::top_prefixes(tree, root)
+    let top = match colors.top_prefixes() {
+        Some(top) => top.to_vec(),
+        None => palette::top_prefixes(tree, root),
+    };
+    let mut rows: Vec<LegendRow> = top
         .into_iter()
         .map(|prefix| {
             let usage = tree.node(prefix).usage();

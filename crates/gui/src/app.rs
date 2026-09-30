@@ -185,21 +185,20 @@ impl App {
     }
 
     fn estimate_window(&mut self, ctx: &egui::Context) {
+        let scanning = self.is_scanning();
         let Some(task) = &mut self.estimate else {
             return;
         };
         let mut open = true;
-        let action = task.show(ctx, &mut open);
+        let action = task.show(ctx, &mut open, scanning);
         if !open {
             self.estimate = None;
         }
         match action {
             Some(estimate_view::Action::Scan(request)) => {
                 self.estimate = None;
-                if !self.is_scanning() {
-                    self.location_input = request.location.to_string();
-                    self.start_scan(*request, ctx);
-                }
+                self.location_input = request.location.to_string();
+                self.start_scan(*request, ctx);
             }
             Some(estimate_view::Action::Choose(bucket)) => {
                 self.location_input = format!("s3://{bucket}/");
@@ -302,9 +301,9 @@ impl App {
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
                     format!(
-                        "{} in {} incomplete uploads (~{}/mo)",
+                        "{} in {} (~{}/mo)",
                         format_bytes(uploads.bytes),
-                        format_count(uploads.objects),
+                        format_counted(uploads.objects, "incomplete upload"),
                         format_usd(uploads.monthly_cost)
                     ),
                 )

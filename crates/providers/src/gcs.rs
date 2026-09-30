@@ -5,7 +5,8 @@ mod location;
 mod prices;
 mod pricing;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clouddirstat_core::{Entry, EntryKind};
@@ -174,6 +175,7 @@ impl GcsScanner {
             default_class: target.default_class.clone(),
             key_prefix,
             include_versions: options.include_versions,
+            soft_deleted_off: Arc::new(AtomicBool::new(false)),
             list_price_per_1000: GcsPricing::list_price_per_1000(&target.default_class),
             requests: Arc::clone(&requests),
             cost_nanodollars: Arc::clone(&cost),
@@ -335,7 +337,6 @@ fn record_bucket_result(
 
 /// Lists everything under `prefix`: expands prefixes breadth-first until there are
 /// enough to keep `concurrency` requests busy, then lists each one fully in parallel.
-/// With versions, soft-deleted objects (billed until their retention ends) come last.
 async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Result<()> {
     let concurrency = concurrency.max(1);
 
@@ -346,7 +347,7 @@ async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Resu
         }
         let mut subprefixes = Vec::new();
         for prefix in prefixes {
-            subprefixes.extend(lister.list(prefix, Some("/"), false).await?);
+            subprefixes.extend(lister.list(prefix, Some("/")).await?);
         }
         prefixes = subprefixes;
     }
@@ -359,21 +360,10 @@ async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Resu
             finished??;
         }
         let lister = lister.clone();
-        tasks.spawn(async move { lister.list(prefix, None, false).await.map(drop) });
+        tasks.spawn(async move { lister.list(prefix, None).await.map(drop) });
     }
     while let Some(finished) = tasks.join_next().await {
         finished??;
-    }
-
-    if lister.include_versions {
-        match lister.list(prefix, None, true).await {
-            Ok(_) => {}
-            Err(Error::Cancelled) => return Err(Error::Cancelled),
-            Err(error) => lister.warn(format!(
-                "{}: soft-deleted objects not checked. {error}",
-                lister.bucket
-            )),
-        }
     }
     Ok(())
 }
@@ -387,6 +377,9 @@ struct Lister {
     /// Prepended to every key; `bucket/` in an all-buckets scan.
     key_prefix: String,
     include_versions: bool,
+    /// Set once listing soft-deleted objects has failed in this bucket (e.g. for lack
+    /// of permission), so the rest is listed without them and warned about once.
+    soft_deleted_off: Arc<AtomicBool>,
     list_price_per_1000: f64,
     requests: Arc<AtomicU64>,
     cost_nanodollars: Arc<AtomicU64>,
@@ -397,65 +390,97 @@ struct Lister {
 
 impl Lister {
     /// Lists objects under `prefix`, sending them to the tree, and returns the
-    /// subprefixes when `delimiter` is given. `soft_deleted` lists soft-deleted objects
-    /// instead of live ones (and their old versions).
-    async fn list(
-        &self,
-        prefix: String,
-        delimiter: Option<&str>,
-        soft_deleted: bool,
-    ) -> Result<Vec<String>> {
+    /// subprefixes when `delimiter` is given.
+    ///
+    /// With versions, soft-deleted objects (billed until their retention ends) come
+    /// from a second listing of the same prefix. Both are sorted by name, so they are
+    /// merged as they arrive: every version of a name reaches the tree together, which
+    /// is how it recognizes them as one object.
+    async fn list(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
         let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
-        let mut subprefixes = Vec::new();
-        let mut page_token: Option<String> = None;
+        let mut live = Pages::new(prefix.clone(), false);
+        let mut deleted = (self.include_versions && !self.soft_deleted_off.load(Ordering::Relaxed))
+            .then(|| Pages::new(prefix, true));
+        let mut subprefixes = BTreeSet::new();
         loop {
-            let mut url = format!(
-                "{API}/b/{}/o?prefix={}&maxResults=1000&fields={}",
-                encode(&self.bucket),
-                encode(&prefix),
-                encode(OBJECT_FIELDS)
-            );
-            if let Some(delimiter) = delimiter {
-                url.push_str(&format!("&delimiter={}", encode(delimiter)));
+            if live.wants_page() {
+                subprefixes.extend(self.next_page(&mut live, delimiter).await?);
             }
-            if soft_deleted {
-                url.push_str("&softDeleted=true");
-            } else if self.include_versions {
-                url.push_str("&versions=true");
-            }
-            if let Some(token) = &page_token {
-                url.push_str(&format!("&pageToken={}", encode(token)));
+            if let Some(pages) = deleted.as_mut().filter(|pages| pages.wants_page()) {
+                match self.next_page(pages, delimiter).await {
+                    Ok(prefixes) => subprefixes.extend(prefixes),
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(error) => {
+                        self.soft_deleted_failed(&error);
+                        deleted = None;
+                    }
+                }
             }
 
-            let token = self.auth.token().await?;
-            let authorization = format!("Bearer {token}");
-            let response = self
-                .http
-                .get(&url, &[("authorization", &authorization)])
-                .await?;
-            self.count_request();
-            match response.status.as_u16() {
-                200 => {}
-                401 => return Err(rejected(&response)),
-                404 => return Err(Error::NoSuchBucket(self.bucket.clone())),
-                _ => return Err(api_error("objects.list", "storage.objects.list", &response)),
+            let mut entries = Vec::new();
+            while let Some((object, soft_deleted)) = next_by_name(&mut live, deleted.as_mut()) {
+                entries.push(self.entry(object, soft_deleted));
             }
+            if !entries.is_empty() {
+                self.sink
+                    .send(entries)
+                    .await
+                    .map_err(|_| Error::Cancelled)?;
+            }
+            if live.is_finished() && deleted.as_ref().is_none_or(Pages::is_finished) {
+                return Ok(subprefixes.into_iter().collect());
+            }
+        }
+    }
 
-            let page: ObjectPage = parse(&response)?;
-            let entries = page
-                .items
-                .into_iter()
-                .map(|object| self.entry(object, soft_deleted))
-                .collect();
-            self.sink
-                .send(entries)
-                .await
-                .map_err(|_| Error::Cancelled)?;
-            subprefixes.extend(page.prefixes);
-            match page.next_page_token {
-                Some(token) => page_token = Some(token),
-                None => return Ok(subprefixes),
-            }
+    /// Fetches the next page of `pages` into its buffer and returns its subprefixes.
+    async fn next_page(&self, pages: &mut Pages, delimiter: Option<&str>) -> Result<Vec<String>> {
+        let mut url = format!(
+            "{API}/b/{}/o?prefix={}&maxResults=1000&fields={}",
+            encode(&self.bucket),
+            encode(&pages.prefix),
+            encode(OBJECT_FIELDS)
+        );
+        if let Some(delimiter) = delimiter {
+            url.push_str(&format!("&delimiter={}", encode(delimiter)));
+        }
+        // The API does not allow both at once.
+        if pages.soft_deleted {
+            url.push_str("&softDeleted=true");
+        } else if self.include_versions {
+            url.push_str("&versions=true");
+        }
+        if let Some(token) = &pages.next_token {
+            url.push_str(&format!("&pageToken={}", encode(token)));
+        }
+
+        let token = self.auth.token().await?;
+        let authorization = format!("Bearer {token}");
+        let response = self
+            .http
+            .get(&url, &[("authorization", &authorization)])
+            .await?;
+        self.count_request();
+        match response.status.as_u16() {
+            200 => {}
+            401 => return Err(rejected(&response)),
+            404 => return Err(Error::NoSuchBucket(self.bucket.clone())),
+            _ => return Err(api_error("objects.list", "storage.objects.list", &response)),
+        }
+
+        let page: ObjectPage = parse(&response)?;
+        pages.buffer.extend(page.items);
+        pages.done = page.next_page_token.is_none();
+        pages.next_token = page.next_page_token;
+        Ok(page.prefixes)
+    }
+
+    fn soft_deleted_failed(&self, error: &Error) {
+        if !self.soft_deleted_off.swap(true, Ordering::Relaxed) {
+            self.warn(format!(
+                "{}: soft-deleted objects not checked. {error}",
+                self.bucket
+            ));
         }
     }
 
@@ -489,6 +514,57 @@ impl Lister {
         if let Ok(mut warnings) = self.warnings.lock() {
             warnings.push(warning);
         }
+    }
+}
+
+/// One paged listing of a prefix (live objects, or soft-deleted ones), and the objects
+/// fetched but not yet sent.
+struct Pages {
+    prefix: String,
+    soft_deleted: bool,
+    buffer: VecDeque<ObjectResource>,
+    next_token: Option<String>,
+    done: bool,
+}
+
+impl Pages {
+    fn new(prefix: String, soft_deleted: bool) -> Self {
+        Self {
+            prefix,
+            soft_deleted,
+            buffer: VecDeque::new(),
+            next_token: None,
+            done: false,
+        }
+    }
+
+    /// Whether the next page is needed before more can be sent.
+    fn wants_page(&self) -> bool {
+        self.buffer.is_empty() && !self.done
+    }
+
+    fn is_finished(&self) -> bool {
+        self.buffer.is_empty() && self.done
+    }
+}
+
+/// The next object by name from the two listings, and whether it is soft-deleted.
+/// `None` when that can't be known yet, because a listing that may still hold smaller
+/// names needs its next page first. Live objects go first on equal names.
+fn next_by_name(live: &mut Pages, deleted: Option<&mut Pages>) -> Option<(ObjectResource, bool)> {
+    let Some(deleted) = deleted else {
+        return live.buffer.pop_front().map(|object| (object, false));
+    };
+    let take_live = match (live.buffer.front(), deleted.buffer.front()) {
+        (Some(object), Some(soft_deleted)) => object.name <= soft_deleted.name,
+        (Some(_), None) => deleted.done,
+        (None, Some(_)) if live.done => false,
+        _ => return None,
+    };
+    if take_live {
+        live.buffer.pop_front().map(|object| (object, false))
+    } else {
+        deleted.buffer.pop_front().map(|object| (object, true))
     }
 }
 
@@ -556,6 +632,57 @@ mod tests {
 
         let empty: ObjectPage = serde_json::from_str("{}").unwrap();
         assert!(empty.items.is_empty() && empty.next_page_token.is_none());
+    }
+
+    fn object(name: &str) -> ObjectResource {
+        ObjectResource {
+            name: name.to_owned(),
+            size: None,
+            storage_class: None,
+            updated: None,
+            time_deleted: None,
+        }
+    }
+
+    fn pages(names: &[&str], done: bool) -> Pages {
+        let mut pages = Pages::new(String::new(), false);
+        pages.buffer.extend(names.iter().map(|&name| object(name)));
+        pages.done = done;
+        pages
+    }
+
+    fn drain(live: &mut Pages, deleted: &mut Pages) -> Vec<(String, bool)> {
+        std::iter::from_fn(|| next_by_name(live, Some(deleted)))
+            .map(|(object, soft_deleted)| (object.name, soft_deleted))
+            .collect()
+    }
+
+    #[test]
+    fn soft_deleted_objects_join_their_name() {
+        let mut live = pages(&["a", "c"], true);
+        let mut deleted = pages(&["a", "b", "d"], true);
+        let names: Vec<(String, bool)> = drain(&mut live, &mut deleted);
+        let expected: Vec<(String, bool)> = [
+            ("a", false),
+            ("a", true),
+            ("b", true),
+            ("c", false),
+            ("d", true),
+        ]
+        .iter()
+        .map(|&(name, soft)| (name.to_owned(), soft))
+        .collect();
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn merging_waits_for_the_next_page() {
+        // "c" can't be sent while the soft-deleted listing may still hold "b".
+        let mut live = pages(&["a", "c"], true);
+        let mut deleted = pages(&["a"], false);
+        let names = drain(&mut live, &mut deleted);
+        assert_eq!(names, [("a".to_owned(), false), ("a".to_owned(), true)]);
+        assert_eq!(live.buffer.len(), 1);
     }
 
     #[test]

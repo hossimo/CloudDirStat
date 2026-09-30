@@ -12,6 +12,7 @@ use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat, 
 use clouddirstat_core::{Cost, Date};
 use tokio::task::JoinSet;
 
+use super::pricing::{INT_ARCHIVE, INT_ARCHIVE_INSTANT, INT_DEEP_ARCHIVE, INT_INFREQUENT};
 use super::{LIST_PRICE_PER_1000_USD, S3Pricing, request_error};
 use crate::{Result, SkippedBucket};
 
@@ -25,46 +26,19 @@ const MAX_QUERIES_PER_REQUEST: usize = 500;
 const OBJECTS_PER_LIST: u64 = 1000;
 
 /// CloudWatch `StorageType`s: the storage class they are shown under, and the class
-/// whose price applies (per-object overheads of archive tiers are billed at Standard).
+/// whose price applies. Per-object overheads of archive tiers are billed at Standard,
+/// and each Intelligent-Tiering tier at its own rate.
 const STORAGE_TYPES: &[(&str, &str, &str)] = &[
     ("StandardStorage", "STANDARD", "STANDARD"),
-    (
-        "IntelligentTieringFAStorage",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    (
-        "IntelligentTieringIAStorage",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    (
-        "IntelligentTieringAIAStorage",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    (
-        "IntelligentTieringAAStorage",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    (
-        "IntelligentTieringDAAStorage",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    (
-        "IntAAObjectOverhead",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    ("IntAAS3ObjectOverhead", "INTELLIGENT_TIERING", "STANDARD"),
-    (
-        "IntDAAObjectOverhead",
-        "INTELLIGENT_TIERING",
-        "INTELLIGENT_TIERING",
-    ),
-    ("IntDAAS3ObjectOverhead", "INTELLIGENT_TIERING", "STANDARD"),
+    ("IntelligentTieringFAStorage", INT, INT),
+    ("IntelligentTieringIAStorage", INT, INT_INFREQUENT),
+    ("IntelligentTieringAIAStorage", INT, INT_ARCHIVE_INSTANT),
+    ("IntelligentTieringAAStorage", INT, INT_ARCHIVE),
+    ("IntelligentTieringDAAStorage", INT, INT_DEEP_ARCHIVE),
+    ("IntAAObjectOverhead", INT, INT_ARCHIVE),
+    ("IntAAS3ObjectOverhead", INT, "STANDARD"),
+    ("IntDAAObjectOverhead", INT, INT_DEEP_ARCHIVE),
+    ("IntDAAS3ObjectOverhead", INT, "STANDARD"),
     ("StandardIAStorage", "STANDARD_IA", "STANDARD_IA"),
     ("StandardIASizeOverhead", "STANDARD_IA", "STANDARD_IA"),
     ("OneZoneIAStorage", "ONEZONE_IA", "ONEZONE_IA"),
@@ -85,6 +59,7 @@ const STORAGE_TYPES: &[(&str, &str, &str)] = &[
     ("DeepArchiveS3ObjectOverhead", "DEEP_ARCHIVE", "STANDARD"),
     ("DeepArchiveStagingStorage", "DEEP_ARCHIVE", "STANDARD"),
 ];
+const INT: &str = "INTELLIGENT_TIERING";
 
 /// How much to ask CloudWatch for. It bills per metric, so counting objects alone is
 /// 26 times cheaper than a full breakdown.
@@ -455,6 +430,30 @@ mod tests {
         expected += pricing.bytes_cost("DEEP_ARCHIVE", 101 * GIB);
         assert_eq!(estimate.monthly_cost, expected);
         assert_eq!(estimate.list_requests(), 3 + 1);
+    }
+
+    #[test]
+    fn prices_each_intelligent_tiering_tier_at_its_own_rate() {
+        let estimate = BucketEstimate::new(
+            "b".to_owned(),
+            "us-east-1".to_owned(),
+            &[
+                (index("IntelligentTieringFAStorage"), GIB),
+                (index("IntelligentTieringDAAStorage"), 100 * GIB),
+            ],
+            None,
+            None,
+        );
+
+        assert_eq!(
+            estimate.classes,
+            [("INTELLIGENT_TIERING".to_owned(), 101 * GIB)]
+        );
+        let pricing = S3Pricing::for_region("us-east-1");
+        let mut expected = pricing.bytes_cost(INT, GIB);
+        expected += pricing.bytes_cost(INT_DEEP_ARCHIVE, 100 * GIB);
+        assert_eq!(estimate.monthly_cost, expected);
+        assert!(estimate.monthly_cost < pricing.bytes_cost(INT, 101 * GIB));
     }
 
     #[test]

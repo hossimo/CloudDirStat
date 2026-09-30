@@ -438,7 +438,7 @@ impl Lister {
             let mut url = format!(
                 "https://{}.blob.core.windows.net/{}?restype=container&comp=list&maxresults=5000&prefix={}",
                 self.account,
-                encode(&self.container),
+                container_path(&self.container),
                 encode(&prefix)
             );
             if split {
@@ -533,6 +533,13 @@ fn check(response: &Response, operation: &'static str, what: &str) -> Result<()>
             message: error,
         }),
     }
+}
+
+/// A container name as a URL path segment. `$` (in `$web`, `$logs`, `$root`) is legal in
+/// a path, so it stays as is: Shared Key signs the path as sent, and a `%24` there
+/// would have to be signed exactly the way Azure decodes it.
+fn container_path(container: &str) -> String {
+    encode(container).replace("%24", "$")
 }
 
 fn bad_xml(error: String) -> Error {
@@ -729,6 +736,12 @@ mod tests {
         assert!(page.blobs[1].version && !page.blobs[1].current_version);
         assert_eq!(page.blobs[2].name, "odd\u{1}name");
         assert!(page.blobs[2].deleted);
+    }
+
+    #[test]
+    fn special_containers_keep_their_dollar_sign() {
+        assert_eq!(container_path("$web"), "$web");
+        assert_eq!(container_path("photos-2024"), "photos-2024");
     }
 
     #[test]

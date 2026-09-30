@@ -76,12 +76,19 @@ impl AzureCredentials {
                 .map(str::to_owned)
         };
         let (auth, kind) = match (secret(&self.account_key), secret(&self.sas)) {
+            // A connection string can hold a SAS instead of a key.
+            (Some(key), _) if is_sas_connection_string(&key) => {
+                (sas_from_connection_string(&key, account)?, "a SAS token")
+            }
             (Some(key), _) => (
                 BlobAuth::SharedKey(Box::new(SharedKey::new(&key, account)?)),
                 "an account key",
             ),
             (None, Some(sas)) => (
-                BlobAuth::Sas(sas.trim_start_matches('?').to_owned()),
+                BlobAuth::Sas {
+                    query: clean_sas(&sas),
+                    account: String::new(),
+                },
                 "a SAS token",
             ),
             (None, None) => return Ok(BlobAuth::Cli(Arc::clone(tokens))),
@@ -99,8 +106,12 @@ impl AzureCredentials {
 /// How Blob service requests are signed.
 pub(super) enum BlobAuth {
     Cli(Arc<CliTokens>),
-    /// The SAS query string, without a leading `?`.
-    Sas(String),
+    /// The SAS query string, without a leading `?`, and the account it is for when a
+    /// connection string says (empty otherwise).
+    Sas {
+        query: String,
+        account: String,
+    },
     SharedKey(Box<SharedKey>),
 }
 
@@ -113,6 +124,7 @@ impl BlobAuth {
     pub fn account(&self) -> Option<&str> {
         match self {
             Self::SharedKey(key) if !key.account.is_empty() => Some(&key.account),
+            Self::Sas { account, .. } if !account.is_empty() => Some(account),
             _ => None,
         }
     }
@@ -121,7 +133,7 @@ impl BlobAuth {
     pub fn describe(&self) -> &'static str {
         match self {
             Self::Cli(_) => "the Azure CLI",
-            Self::Sas(_) => "a SAS token",
+            Self::Sas { .. } => "a SAS token",
             Self::SharedKey(_) => "an account key",
         }
     }
@@ -135,7 +147,7 @@ impl BlobAuth {
                 http.get(url, &[version, ("authorization", &authorization)])
                     .await
             }
-            Self::Sas(sas) => http.get(&format!("{url}&{sas}"), &[version]).await,
+            Self::Sas { query, .. } => http.get(&format!("{url}&{query}"), &[version]).await,
             Self::SharedKey(key) => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -170,29 +182,11 @@ impl SharedKey {
         let mut key = key_or_connection_string;
         let mut account = account.to_owned();
         if key.contains("AccountKey=") {
-            let field = |name: &str| {
-                key_or_connection_string
-                    .split(';')
-                    .filter_map(|part| part.trim().split_once('='))
-                    .find(|(field, _)| field.eq_ignore_ascii_case(name))
-                    .map(|(_, value)| value)
-            };
+            let field = |name| connection_field(key_or_connection_string, name);
             if let Some(named) = field("AccountName") {
-                if account.is_empty() {
-                    account = named.to_ascii_lowercase();
-                } else if !named.eq_ignore_ascii_case(&account) {
-                    return Err(Error::Credentials(format!(
-                        "the connection string is for account {named}, not {account}"
-                    )));
-                }
+                account = connection_account(named, &account)?;
             }
-            if let Some(suffix) = field("EndpointSuffix")
-                && !suffix.eq_ignore_ascii_case("core.windows.net")
-            {
-                return Err(Error::Credentials(format!(
-                    "only the public Azure cloud (core.windows.net) is supported, not {suffix}"
-                )));
-            }
+            check_endpoint_suffix(field("EndpointSuffix"))?;
             key = field("AccountKey").unwrap_or_default();
         }
         let bytes = BASE64.decode(key).map_err(|_| {
@@ -222,6 +216,81 @@ impl SharedKey {
             BASE64.encode(signature.as_ref())
         )
     }
+}
+
+/// A SAS as pasted: without a leading `?`, and without whitespace (from line wrapping),
+/// which a SAS never contains.
+fn clean_sas(sas: &str) -> String {
+    let sas: String = sas.split_whitespace().collect();
+    sas.trim_start_matches('?').to_owned()
+}
+
+/// `name=value` from a `;`-separated connection string (names in any case).
+fn connection_field<'a>(connection_string: &'a str, name: &str) -> Option<&'a str> {
+    connection_string
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(field, _)| field.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value)
+}
+
+fn is_sas_connection_string(text: &str) -> bool {
+    connection_field(text, "SharedAccessSignature").is_some()
+        && connection_field(text, "AccountKey").is_none()
+}
+
+/// The account a connection string names, which must be `account` unless that is empty.
+fn connection_account(named: &str, account: &str) -> Result<String> {
+    if !account.is_empty() && !named.eq_ignore_ascii_case(account) {
+        return Err(Error::Credentials(format!(
+            "the connection string is for account {named}, not {account}"
+        )));
+    }
+    Ok(named.to_ascii_lowercase())
+}
+
+fn check_endpoint_suffix(suffix: Option<&str>) -> Result<()> {
+    match suffix {
+        Some(suffix) if !suffix.eq_ignore_ascii_case("core.windows.net") => {
+            Err(Error::Credentials(format!(
+                "only the public Azure cloud (core.windows.net) is supported, not {suffix}"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A connection string with a SAS (`BlobEndpoint=https://ACCOUNT.blob.core.windows.net/;
+/// SharedAccessSignature=sv=...`). It names its account in `AccountName` or in the
+/// endpoint's host.
+fn sas_from_connection_string(text: &str, account: &str) -> Result<BlobAuth> {
+    let field = |name| connection_field(text, name);
+    check_endpoint_suffix(field("EndpointSuffix"))?;
+    let endpoint_account = match field("BlobEndpoint") {
+        Some(endpoint) => {
+            let host = endpoint
+                .split_once("://")
+                .map_or(endpoint, |(_, rest)| rest)
+                .split('/')
+                .next()
+                .unwrap_or_default();
+            let Some(name) = host.strip_suffix(".blob.core.windows.net") else {
+                return Err(Error::Credentials(format!(
+                    "only the public Azure cloud (blob.core.windows.net) is supported, not {host}"
+                )));
+            };
+            Some(name)
+        }
+        None => None,
+    };
+    let account = match field("AccountName").or(endpoint_account) {
+        Some(named) => connection_account(named, account)?,
+        None => account.to_owned(),
+    };
+    Ok(BlobAuth::Sas {
+        query: clean_sas(field("SharedAccessSignature").unwrap_or_default()),
+        account,
+    })
 }
 
 /// `/account/path` followed by each query parameter, decoded and sorted by name, as
@@ -365,7 +434,7 @@ mod tests {
         };
         let tokens = Arc::new(CliTokens::default());
         match credentials.blob_auth("acct", &tokens).unwrap() {
-            BlobAuth::Sas(sas) => assert_eq!(sas, "sv=2024&sig=secret"),
+            BlobAuth::Sas { query, .. } => assert_eq!(query, "sv=2024&sig=secret"),
             _ => panic!("expected a SAS"),
         }
         assert!(credentials.blob_auth("", &tokens).is_err());
@@ -396,6 +465,34 @@ mod tests {
         ));
         assert!(with("not base64!").blob_auth("acct", &tokens).is_err());
         assert!(!format!("{:?}", with(connection)).contains("a2V5"));
+    }
+
+    #[test]
+    fn sas_loses_whitespace_from_line_wrapping() {
+        assert_eq!(
+            clean_sas("?sv=2024&se=x\n  &sig=abc "),
+            "sv=2024&se=x&sig=abc"
+        );
+    }
+
+    #[test]
+    fn reads_sas_connection_strings() {
+        let tokens = Arc::new(CliTokens::default());
+        let credentials = AzureCredentials {
+            sas: None,
+            account_key: Some(
+                "BlobEndpoint=https://acct.blob.core.windows.net/;SharedAccessSignature=sv=2024&sig=abc"
+                    .to_owned(),
+            ),
+        };
+        let auth = credentials.blob_auth("", &tokens).unwrap();
+        assert_eq!(auth.account(), Some("acct"));
+        match auth {
+            BlobAuth::Sas { query, .. } => assert_eq!(query, "sv=2024&sig=abc"),
+            _ => panic!("expected a SAS"),
+        }
+        assert!(credentials.blob_auth("other", &tokens).is_err());
+        assert!(credentials.blob_auth("acct", &tokens).is_ok());
     }
 
     #[test]

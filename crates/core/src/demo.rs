@@ -7,6 +7,9 @@ use crate::{Entry, EntryKind};
 const KB: u64 = 1024;
 const MB: u64 = 1024 * KB;
 const GB: u64 = 1024 * MB;
+const DAY: u64 = 86_400;
+/// 2026-09-01: demo files were last changed up to a few years before this.
+const DEMO_TODAY: u64 = 20_697 * DAY;
 
 /// A made-up bucket with its own mix of folders, file types, and storage classes.
 pub struct DemoBucket {
@@ -246,16 +249,21 @@ impl DemoBucket {
         let key = format!("{folder}{}_{counter:06}.{extension}", rng.pick(self.stems));
         let size = rng.log_uniform(smallest, largest);
         let class = rng.weighted(self.storage_classes, |c| c.1).0;
-        let entry = |size, kind| Entry {
+        // Dates come from their own generator so the rest of the data stays the same
+        // as before dates existed. Most files are recent; a few are years old.
+        let mut dates = Rng::new(counter ^ hash_name(self.name));
+        let modified = DEMO_TODAY - dates.log_uniform(1, 1500) * DAY - dates.below(DAY);
+        let entry = |size, kind, modified| Entry {
             key: key.clone(),
             size,
             storage_class: class.to_owned(),
             kind,
+            last_modified: Some(modified),
         };
 
         if (rng.below(1000) as u32) < self.abandoned_uploads_per_mille {
             let uploaded = size / 100 * (10 + rng.below(80));
-            out.push(entry(uploaded, EntryKind::IncompleteUpload));
+            out.push(entry(uploaded, EntryKind::IncompleteUpload, modified));
             return;
         }
 
@@ -264,16 +272,18 @@ impl DemoBucket {
         let versioned = with_versions && roll < self.deleted_percent + self.versioned_percent;
 
         if !deleted {
-            out.push(entry(size, EntryKind::Current));
+            out.push(entry(size, EntryKind::Current, modified));
         }
         if versioned {
+            let mut version_modified = modified;
             for _ in 0..1 + rng.below(3) {
                 let older = size / 100 * (80 + rng.below(40));
-                out.push(entry(older, EntryKind::Noncurrent));
+                version_modified -= (1 + dates.below(120)) * DAY;
+                out.push(entry(older, EntryKind::Noncurrent, version_modified));
             }
         }
         if deleted {
-            out.push(entry(0, EntryKind::DeleteMarker));
+            out.push(entry(0, EntryKind::DeleteMarker, modified));
         }
     }
 }

@@ -156,6 +156,7 @@ mod tests {
                 size,
                 storage_class: class.to_owned(),
                 kind: EntryKind::Current,
+                last_modified: None,
             })
             .usd()
     }
@@ -196,6 +197,7 @@ mod tests {
             size: 0,
             storage_class: "STANDARD".to_owned(),
             kind: EntryKind::DeleteMarker,
+            last_modified: None,
         };
         assert_eq!(pricing.monthly_cost(&marker), Cost::ZERO);
     }
@@ -220,6 +222,7 @@ mod tests {
                     size: GB,
                     storage_class: "STANDARD".to_owned(),
                     kind: EntryKind::Current,
+                    last_modified: None,
                 })
                 .usd()
         };

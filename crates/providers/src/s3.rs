@@ -11,6 +11,7 @@ use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::ProvideCredentials;
 use aws_sdk_s3::error::DisplayErrorContext;
+use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::types::CommonPrefix;
 use clouddirstat_core::{Entry, EntryKind};
 use tokio::sync::Semaphore;
@@ -307,6 +308,7 @@ struct Upload {
     key: String,
     upload_id: String,
     storage_class: String,
+    initiated: Option<u64>,
 }
 
 impl Lister {
@@ -345,6 +347,7 @@ impl Lister {
                         object.storage_class().map(|class| class.as_str()),
                     ),
                     kind: EntryKind::Current,
+                    last_modified: unix_seconds(object.last_modified()),
                 })
                 .collect();
             self.send(entries).await?;
@@ -383,12 +386,14 @@ impl Lister {
                 } else {
                     EntryKind::Noncurrent
                 },
+                last_modified: unix_seconds(version.last_modified()),
             });
             let delete_markers = page.delete_markers().iter().map(|marker| Entry {
                 key: self.key(marker.key()),
                 size: 0,
                 storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
                 kind: EntryKind::DeleteMarker,
+                last_modified: unix_seconds(marker.last_modified()),
             });
             self.send(merge_by_key(versions, delete_markers)).await?;
             subprefixes.extend(prefix_names(page.common_prefixes()));
@@ -442,6 +447,7 @@ impl Lister {
                 size,
                 storage_class: upload.storage_class,
                 kind: EntryKind::IncompleteUpload,
+                last_modified: upload.initiated,
             });
         }
         if let Some(error) = unknown_sizes {
@@ -487,6 +493,7 @@ impl Lister {
                     storage_class: storage_class(
                         upload.storage_class().map(|class| class.as_str()),
                     ),
+                    initiated: unix_seconds(upload.initiated()),
                 })
             }));
 
@@ -644,6 +651,11 @@ fn to_size(size: Option<i64>) -> u64 {
     size.and_then(|size| u64::try_from(size).ok()).unwrap_or(0)
 }
 
+/// Seconds since the Unix epoch; `None` when missing or before 1970.
+fn unix_seconds(time: Option<&DateTime>) -> Option<u64> {
+    time.and_then(|time| u64::try_from(time.secs()).ok())
+}
+
 fn storage_class(class: Option<&str>) -> String {
     class.unwrap_or(DEFAULT_STORAGE_CLASS).to_owned()
 }
@@ -658,6 +670,7 @@ mod tests {
             size: 1,
             storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
             kind,
+            last_modified: None,
         }
     }
 

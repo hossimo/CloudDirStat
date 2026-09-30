@@ -1,4 +1,5 @@
 mod arena;
+mod date;
 #[cfg(feature = "demo")]
 pub mod demo;
 mod filter;
@@ -21,6 +22,7 @@ pub const LONG_VERSION: &str = concat!(
     ")"
 );
 
+pub use date::Date;
 pub use filter::{Filtered, Subset};
 pub use format::{format_bytes, format_count, format_usd};
 pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
@@ -127,4 +129,7 @@ pub struct Entry {
     pub size: u64,
     pub storage_class: String,
     pub kind: EntryKind,
+    /// Seconds since the Unix epoch, when the provider reports it. For an incomplete
+    /// upload, when it was started.
+    pub last_modified: Option<u64>,
 }

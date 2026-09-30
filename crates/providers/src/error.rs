@@ -15,6 +15,14 @@ pub enum Error {
     )]
     InvalidLocation(String),
 
+    #[error(
+        "invalid bucket name {0:?}: bucket names are 3 to 63 lowercase letters, numbers, dots, and hyphens"
+    )]
+    InvalidBucketName(String),
+
+    #[error("bucket {0} does not exist")]
+    NoSuchBucket(String),
+
     #[error("scan was cancelled")]
     Cancelled,
 

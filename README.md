@@ -28,6 +28,7 @@ clouddirstat scan s3://my-bucket
 clouddirstat scan s3://my-bucket/logs/ --profile prod --depth 3
 clouddirstat scan s3://my-bucket --versions
 clouddirstat scan s3://                      # every bucket, each as a top-level folder
+clouddirstat estimate s3://                  # sizes, costs, and scan cost from CloudWatch, without listing
 ```
 
 | Option | Default | Description |
@@ -81,8 +82,9 @@ Enter a location (and optionally a profile) and press **Scan**, or pass them on 
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list. Double-click to zoom one folder level toward the pointer, right-click (or the mouse back button) to zoom out, or right-click a folder in the list and choose **Zoom treemap here**. The path above the treemap shows where you are; click any part of it to jump back.
 - **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions and deleted objects whose old versions are still billed, which need **Versions** checked, plus incomplete uploads, which are always found), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
 - **Filter:** click a row in the legend (a storage class, object state such as *Incomplete upload*, prefix, or file type) to show only those objects in the folder list, largest files, and treemap, with sizes and costs recalculated. A bar above the lists shows the active filter and its total; click the row again, press **Clear filter**, or press Esc to show everything.
-- **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details).
+- **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details). While a whole bucket (or `s3://`) is being scanned, a progress bar compares the objects listed so far with CloudWatch's count.
 - **Stop** ends the scan and keeps the partial result.
+- **Estimate** shows the size, object count, storage classes, monthly cost, and the cost of a full scan from CloudWatch, in seconds and without listing anything; for `s3://`, per bucket (click one to put it in Location). See [Estimates from CloudWatch](#estimates-from-cloudwatch).
 - **Help** explains the permissions a scan needs and shows a minimal IAM policy for the bucket in the Location field, ready to copy.
 
 ### Credentials
@@ -106,6 +108,20 @@ clouddirstat scan s3://my-bucket
 ```
 
 If you do create an access key, give it only the permissions below.
+
+### Estimates from CloudWatch
+
+S3 publishes each bucket's size (per storage class) and object count to CloudWatch once a day, for free. `clouddirstat estimate` and the GUI's **Estimate** button read them, so you can see how big a bucket is, what it costs per month, and what a full scan would cost before running one:
+
+```
+s3://  2.9 TiB in 4,210,332 objects (CloudWatch, 2026-09-27)
+Estimated storage cost ~$41.18/month (list prices from 2026-09-28)
+A full scan needs about 4,225 LIST requests (~$0.0211); this estimate cost ~$0.0016
+```
+
+- Needs `cloudwatch:GetMetricData` (optional; without it, Estimate shows an error and scans show no progress bar). It costs $0.01 per 1,000 metrics: 26 per bucket for an estimate (about $0.0003), 1 per bucket for scan progress.
+- The figures are a day or two old and cover whole buckets, not prefixes. Object counts include every version, delete marker, and upload part, so a scan without versions may list fewer objects.
+- Costs use the same list prices as scans, but CloudWatch reports Intelligent-Tiering bytes per tier without object counts, so the monitoring fee is left out.
 
 ### Cost of a scan
 
@@ -142,6 +158,7 @@ The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 | `s3:ListBucketMultipartUploads` | optional | Finding incomplete multipart uploads (hidden, billed storage) |
 | `s3:ListMultipartUploadParts` | optional | Sizing those uploads (on `arn:aws:s3:::bucket/*`) |
 | `s3:ListAllMyBuckets` | only for `s3://` (all buckets) | Finding every bucket to scan them together |
+| `cloudwatch:GetMetricData` | optional | Estimates and scan progress from S3's daily storage metrics |
 
 CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
 
@@ -246,13 +263,13 @@ Done:
 - [x] Filter the folder list, largest files, and treemap by storage class, object state, prefix, or file type
 - [x] Last modified column
 - [x] Click to zoom into a folder in the treemap
+- [x] Instant bucket totals and scan-cost estimate from CloudWatch
 - [x] Credentials: profiles, `aws login`, IAM Identity Center, access keys
 - [x] Low memory for large buckets (~66 bytes per object)
 - [x] Release builds for Windows, macOS, and Linux (x64 and ARM64)
 
 Next:
 
-- [ ] Instant bucket totals and scan-cost estimate from CloudWatch
 - [ ] macOS app bundle and code signing
 - [ ] Read S3 Inventory reports for billion-object buckets
 - [ ] Azure Blob Storage

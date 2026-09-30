@@ -30,9 +30,12 @@ pub struct Scan {
     pub include_versions: bool,
     pub tree: Tree,
     pub pricing: Option<Arc<S3Pricing>>,
+    /// CloudWatch's count of the objects to scan, for progress. Whole-bucket scans only.
+    pub expected_objects: Option<u64>,
     pub state: ScanState,
     started: Instant,
     priced: oneshot::Receiver<Arc<S3Pricing>>,
+    counted: oneshot::Receiver<u64>,
     entries: mpsc::Receiver<Vec<Entry>>,
     outcome: oneshot::Receiver<clouddirstat_providers::Result<ScanStats>>,
 }
@@ -42,12 +45,13 @@ impl Scan {
         let (sender, entries) = mpsc::channel(256);
         let (outcome_sender, outcome) = oneshot::channel();
         let (pricing_sender, priced) = oneshot::channel();
+        let (count_sender, counted) = oneshot::channel();
         let location = request.location.clone();
         let include_versions = request.include_versions;
         let ctx = ctx.clone();
 
         runtime.spawn(async move {
-            let result = run(&request, pricing_sender, sender).await;
+            let result = run(&request, pricing_sender, count_sender, sender).await;
             let _ = outcome_sender.send(result);
             ctx.request_repaint();
         });
@@ -57,9 +61,11 @@ impl Scan {
             include_versions,
             tree: Tree::new(),
             pricing: None,
+            expected_objects: None,
             state: ScanState::Running,
             started: Instant::now(),
             priced,
+            counted,
             entries,
             outcome,
         }
@@ -101,6 +107,11 @@ impl Scan {
 
         let deadline = Instant::now() + budget;
         let mut changed = self.receive_pricing();
+        if self.expected_objects.is_none()
+            && let Ok(objects) = self.counted.try_recv()
+        {
+            self.expected_objects = Some(objects).filter(|&objects| objects > 0);
+        }
         loop {
             match self.entries.try_recv() {
                 Ok(batch) => {
@@ -173,6 +184,7 @@ use crate::demo_scan::run;
 async fn run(
     request: &ScanRequest,
     pricing: oneshot::Sender<Arc<S3Pricing>>,
+    expected_objects: oneshot::Sender<u64>,
     sender: mpsc::Sender<Vec<Entry>>,
 ) -> clouddirstat_providers::Result<ScanStats> {
     use clouddirstat_providers::s3::{S3Scanner, ScanOptions};
@@ -184,5 +196,21 @@ async fn run(
         include_versions: request.include_versions,
         concurrency: CONCURRENCY,
     };
-    scanner.scan(&options, sender).await
+    // CloudWatch counts whole buckets, so a prefix scan gets no progress. Without
+    // cloudwatch:GetMetricData the scan simply shows none.
+    let count = async {
+        if request.location.prefix.is_empty()
+            && let Ok(estimate) = scanner.object_counts().await
+        {
+            let _ = expected_objects.send(estimate.objects());
+        }
+    };
+    let scan = scanner.scan(&options, sender);
+    tokio::pin!(count, scan);
+    // The count is only for show: the scan never waits for it, even if CloudWatch is
+    // slow or unreachable.
+    tokio::select! {
+        result = &mut scan => result,
+        () = &mut count => scan.await,
+    }
 }

@@ -5,6 +5,7 @@ mod credentials_form;
 mod cushion;
 #[cfg(feature = "demo")]
 mod demo_scan;
+mod estimate_view;
 mod filter;
 mod help;
 mod largest_files;

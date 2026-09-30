@@ -63,8 +63,8 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
     ui.separator();
     ui.heading("Permissions");
     ui.label(
-        "CloudDirStat only lists your bucket. It never reads object contents and never \
-         writes or deletes anything.",
+        "CloudDirStat only lists your bucket (and reads its storage metrics from \
+         CloudWatch). It never reads object contents and never writes or deletes anything.",
     );
     ui.add_space(4.0);
     egui::Grid::new("permissions")
@@ -99,6 +99,11 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
             ui.monospace("s3:ListAllMyBuckets");
             ui.label("For s3://");
             ui.label("Finding every bucket to scan them all at once");
+            ui.end_row();
+
+            ui.monospace("cloudwatch:GetMetricData");
+            ui.label("Optional");
+            ui.label("Estimate, and progress while scanning (daily S3 storage metrics)");
             ui.end_row();
         });
 

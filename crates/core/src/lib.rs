@@ -24,7 +24,7 @@ pub const LONG_VERSION: &str = concat!(
 
 pub use date::Date;
 pub use filter::{Filtered, Subset};
-pub use format::{format_bytes, format_count, format_usd};
+pub use format::{format_bytes, format_count, format_counted, format_usd};
 pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
 pub use treemap::{Rect, squarify};
 
@@ -93,6 +93,17 @@ impl SubAssign for Cost {
 /// Estimates what keeping an entry stored costs per month. Each provider supplies one.
 pub trait Pricing: std::fmt::Debug + Send + Sync {
     fn monthly_cost(&self, entry: &Entry) -> Cost;
+
+    /// Where the prices come from, for display: e.g. "us-east-1 list prices from
+    /// 2026-09-28".
+    fn source(&self) -> String {
+        String::new()
+    }
+
+    /// What the estimates include and leave out, for a tooltip.
+    fn notes(&self) -> String {
+        String::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

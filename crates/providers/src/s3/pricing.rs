@@ -121,6 +121,20 @@ impl S3Pricing {
 }
 
 impl Pricing for S3Pricing {
+    fn source(&self) -> String {
+        format!("{} list prices from {}", self.region_label(), PUBLISHED)
+    }
+
+    fn notes(&self) -> String {
+        format!(
+            "Estimated storage cost from {} list prices (AWS Price List, {PUBLISHED}).
+             First volume tier; Intelligent-Tiering at Frequent Access rates.
+             Includes minimum billable sizes and archive overhead; excludes requests,
+             retrieval, data transfer, and minimum storage duration charges.",
+            self.region_label()
+        )
+    }
+
     fn monthly_cost(&self, entry: &Entry) -> Cost {
         if entry.kind == EntryKind::DeleteMarker {
             return Cost::ZERO;

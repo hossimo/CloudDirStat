@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use clouddirstat_core::Pricing;
 use clouddirstat_core::{Entry, NodeId, NodeKind, Tree};
-use clouddirstat_providers::s3::{CredentialSource, S3Location, S3Pricing, ScanStats};
+use clouddirstat_providers::{Credentials, Location, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -10,10 +11,10 @@ use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone)]
 pub struct ScanRequest {
-    pub location: S3Location,
+    pub location: Location,
     // Demo builds scan made-up data and need no credentials.
     #[cfg_attr(feature = "demo", allow(dead_code))]
-    pub credentials: CredentialSource,
+    pub credentials: Credentials,
     pub include_versions: bool,
 }
 
@@ -26,15 +27,15 @@ pub enum ScanState {
 
 /// A scan running on the tokio runtime, and the tree built from what it has sent so far.
 pub struct Scan {
-    pub location: S3Location,
+    pub location: Location,
     pub include_versions: bool,
     pub tree: Tree,
-    pub pricing: Option<Arc<S3Pricing>>,
+    pub pricing: Option<Arc<dyn Pricing>>,
     /// CloudWatch's count of the objects to scan, for progress. Whole-bucket scans only.
     pub expected_objects: Option<u64>,
     pub state: ScanState,
     started: Instant,
-    priced: oneshot::Receiver<Arc<S3Pricing>>,
+    priced: oneshot::Receiver<Arc<dyn Pricing>>,
     counted: oneshot::Receiver<u64>,
     entries: mpsc::Receiver<Vec<Entry>>,
     outcome: oneshot::Receiver<clouddirstat_providers::Result<ScanStats>>,
@@ -75,7 +76,7 @@ impl Scan {
     /// so views start where the user pointed rather than at a chain of parent folders.
     pub fn root(&self) -> NodeId {
         let mut node = Tree::ROOT;
-        let Some((folders, _)) = self.location.prefix.rsplit_once('/') else {
+        let Some((folders, _)) = self.location.prefix().rsplit_once('/') else {
             return node;
         };
         for name in folders.split('/') {
@@ -183,15 +184,15 @@ use crate::demo_scan::run;
 #[cfg(not(feature = "demo"))]
 async fn run(
     request: &ScanRequest,
-    pricing: oneshot::Sender<Arc<S3Pricing>>,
+    pricing: oneshot::Sender<Arc<dyn Pricing>>,
     expected_objects: oneshot::Sender<u64>,
     sender: mpsc::Sender<Vec<Entry>>,
 ) -> clouddirstat_providers::Result<ScanStats> {
-    use clouddirstat_providers::s3::{S3Scanner, ScanOptions};
+    use clouddirstat_providers::{ScanOptions, Scanner};
     const CONCURRENCY: usize = 32;
 
-    let scanner = S3Scanner::connect(&request.location, &request.credentials, None).await?;
-    let _ = pricing.send(Arc::new(scanner.pricing()));
+    let scanner = Scanner::connect(&request.location, &request.credentials, None).await?;
+    let _ = pricing.send(scanner.pricing());
     let options = ScanOptions {
         include_versions: request.include_versions,
         concurrency: CONCURRENCY,
@@ -199,7 +200,7 @@ async fn run(
     // CloudWatch counts whole buckets, so a prefix scan gets no progress. Without
     // cloudwatch:GetMetricData the scan simply shows none.
     let count = async {
-        if request.location.prefix.is_empty()
+        if request.location.prefix().is_empty()
             && let Ok(estimate) = scanner.object_counts().await
         {
             let _ = expected_objects.send(estimate.objects());

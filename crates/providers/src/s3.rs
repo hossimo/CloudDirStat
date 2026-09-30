@@ -18,7 +18,6 @@ use aws_sdk_s3::types::CommonPrefix;
 use clouddirstat_core::{Entry, EntryKind};
 use cloudwatch::Detail;
 use tokio::sync::Semaphore;
-use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
 pub use cloudwatch::{BucketEstimate, Estimate, list_cost_usd};
@@ -26,44 +25,15 @@ pub use credentials::{AccessKey, CredentialSource};
 pub use location::S3Location;
 pub use pricing::S3Pricing;
 
-use crate::{Error, Result};
+use crate::{EntrySender, Error, Result, ScanOptions, ScanStats, SkippedBucket};
 
-const LIST_PRICE_PER_1000_USD: f64 = 0.005;
+/// What S3 charges per 1,000 LIST requests.
+pub const LIST_PRICE_PER_1000_USD: f64 = 0.005;
 const DEFAULT_STORAGE_CLASS: &str = "STANDARD";
 const MAX_SPLIT_DEPTH: usize = 3;
 /// Buckets in progress at the same time in an all-buckets scan. They share the
 /// request slots, so a big bucket gets all of them once the small ones are done.
 const BUCKETS_AT_ONCE: usize = 16;
-
-pub type EntrySender = Sender<Vec<Entry>>;
-
-#[derive(Clone, Debug)]
-pub struct ScanOptions {
-    pub include_versions: bool,
-    pub concurrency: usize,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ScanStats {
-    pub list_requests: u64,
-    /// Buckets left out of an all-buckets scan, e.g. for lack of `s3:ListBucket`.
-    pub skipped_buckets: Vec<SkippedBucket>,
-    /// Optional checks that could not run, e.g. incomplete uploads without
-    /// `s3:ListBucketMultipartUploads`. The scan itself still completed.
-    pub warnings: Vec<String>,
-}
-
-impl ScanStats {
-    pub fn estimated_cost_usd(&self) -> f64 {
-        list_cost_usd(self.list_requests)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SkippedBucket {
-    pub bucket: String,
-    pub reason: String,
-}
 
 /// Lists one bucket, or every bucket the credentials can see.
 pub struct S3Scanner {
@@ -217,6 +187,7 @@ impl S3Scanner {
         let warnings = warnings.lock().map(|list| list.clone()).unwrap_or_default();
         Ok(ScanStats {
             list_requests: requests.load(Ordering::Relaxed),
+            list_price_per_1000_usd: LIST_PRICE_PER_1000_USD,
             skipped_buckets: skipped,
             warnings,
         })
@@ -582,11 +553,13 @@ impl Lister {
 async fn check_credentials(config: &SdkConfig) -> Result<()> {
     let provider = config
         .credentials_provider()
-        .ok_or_else(|| Error::Credentials("no credentials provider configured".to_owned()))?;
-    provider
-        .provide_credentials()
-        .await
-        .map_err(|error| Error::Credentials(DisplayErrorContext(error).to_string()))?;
+        .ok_or_else(|| Error::Credentials("no AWS credentials provider configured".to_owned()))?;
+    provider.provide_credentials().await.map_err(|error| {
+        Error::Credentials(format!(
+            "could not load AWS credentials: {}",
+            DisplayErrorContext(error)
+        ))
+    })?;
     Ok(())
 }
 

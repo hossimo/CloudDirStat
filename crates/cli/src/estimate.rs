@@ -1,17 +1,18 @@
-use clouddirstat_core::{format_bytes, format_count, format_usd};
-use clouddirstat_providers::s3::{Estimate, S3Location, S3Pricing, list_cost_usd};
+use clouddirstat_core::{format_bytes, format_count, format_counted, format_usd};
+use clouddirstat_providers::Location;
+use clouddirstat_providers::s3::{Estimate, S3Pricing, list_cost_usd};
 
 /// Prints bucket totals from CloudWatch, and what a full scan would cost.
-pub fn print(location: &S3Location, estimate: &Estimate) {
+pub fn print(location: &Location, estimate: &Estimate) {
     let as_of = estimate
         .as_of()
         .map_or_else(|| "no data yet".to_owned(), |date| date.to_string());
     println!(
-        "{location}  {} in {} objects (CloudWatch, {as_of})",
+        "{location}  {} in {} (CloudWatch, {as_of})",
         format_bytes(estimate.bytes()),
-        format_count(estimate.objects())
+        format_counted(estimate.objects(), "object")
     );
-    if !location.prefix.is_empty() {
+    if !location.prefix().is_empty() {
         println!("Totals are for the whole bucket; CloudWatch does not report prefixes.");
     }
     println!(
@@ -41,7 +42,7 @@ pub fn print(location: &S3Location, estimate: &Estimate) {
         }
     }
 
-    if location.is_all_buckets() {
+    if location.is_all() {
         println!();
         println!(
             "  {:<32} {:<15} {:>10} {:>14} {:>12} {:>10}  As of",

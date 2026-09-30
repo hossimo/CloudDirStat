@@ -6,6 +6,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::filter::{Filter, MAX_FILE_TYPE_ROWS, file_type_label};
 use crate::palette::{self, ColorMode, Colors};
+use crate::scan::Scan;
 use crate::tree_view::right_aligned;
 
 struct LegendRow {
@@ -24,7 +25,7 @@ pub fn show(
     root: NodeId,
     mode: &mut ColorMode,
     colors: &Colors,
-    versions_scanned: bool,
+    scan: &Scan,
     active: Option<&Filter>,
 ) -> Option<Filter> {
     ui.horizontal(|ui| {
@@ -38,25 +39,36 @@ pub fn show(
     let total = tree.node(root).usage();
     egui::ScrollArea::vertical()
         .show(ui, |ui| match *mode {
-            ColorMode::StorageClass => {
-                table(ui, "Storage class", &storage_class_rows(tree), total, active)
-            }
+            ColorMode::StorageClass => table(
+                ui,
+                "Storage class",
+                &storage_class_rows(tree),
+                total,
+                active,
+            ),
             ColorMode::Prefixes => {
                 let rows = prefix_rows(tree, root, colors);
                 table(ui, "Prefix", &rows, total, active)
             }
-            ColorMode::FileTypes => {
-                table(ui, "File type", &file_type_rows(tree, colors), total, active)
-            }
+            ColorMode::FileTypes => table(
+                ui,
+                "File type",
+                &file_type_rows(tree, colors),
+                total,
+                active,
+            ),
             ColorMode::Versions => {
                 let clicked = table(ui, "Object state", &version_state_rows(tree), total, active);
                 ui.add_space(12.0);
-                table(ui, "Version type", &entry_kind_rows(tree), total, active);
-                if !versions_scanned {
+                let provider = scan.location.provider();
+                let rows = entry_kind_rows(tree, provider.entry_kinds());
+                table(ui, "Version type", &rows, total, active);
+                if !scan.include_versions {
                     ui.add_space(12.0);
-                    ui.weak(
-                        "Scan with Versions checked to include noncurrent versions and delete markers.",
-                    );
+                    ui.weak(format!(
+                        "Scan with Versions checked to {}.",
+                        provider.versions_help().to_lowercase()
+                    ));
                 }
                 clicked
             }
@@ -88,10 +100,10 @@ fn version_state_rows(tree: &Tree) -> Vec<LegendRow> {
         .collect()
 }
 
-fn entry_kind_rows(tree: &Tree) -> Vec<LegendRow> {
-    EntryKind::ALL
-        .into_iter()
-        .map(|kind| LegendRow {
+fn entry_kind_rows(tree: &Tree, kinds: &[EntryKind]) -> Vec<LegendRow> {
+    kinds
+        .iter()
+        .map(|&kind| LegendRow {
             color: None,
             label: kind.label().to_owned(),
             usage: tree.usage_by_kind(kind),

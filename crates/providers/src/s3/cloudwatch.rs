@@ -12,8 +12,8 @@ use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat, 
 use clouddirstat_core::{Cost, Date};
 use tokio::task::JoinSet;
 
-use super::{LIST_PRICE_PER_1000_USD, S3Pricing, SkippedBucket, request_error};
-use crate::Result;
+use super::{LIST_PRICE_PER_1000_USD, S3Pricing, request_error};
+use crate::{Result, SkippedBucket};
 
 /// CloudWatch bills GetMetricData per metric requested.
 const METRIC_PRICE_PER_1000_USD: f64 = 0.01;

@@ -195,7 +195,7 @@ fn table(
                             .set_selected(row.filter.is_some() && row.filter.as_ref() == active);
                         table_row.col(|ui| {
                             swatch(ui, row.color);
-                            ui.add(Label::new(&row.label).truncate());
+                            ui.add(Label::new(&row.label).selectable(false).truncate());
                         });
                         table_row.col(|ui| right_aligned(ui, format_bytes(row.usage.bytes)));
                         table_row.col(|ui| {

@@ -43,8 +43,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 ## Quick start
 
 1. **Download** the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system:
-   - **Mac:** `CloudDirStat-…-macos.dmg`. Open it and drag **CloudDirStat** to **Applications**. It runs natively on both Apple Silicon and Intel Macs.
-   - **Mac command line** (optional): `clouddirstat-…-macos.tar.gz`, one `clouddirstat` program for both Mac types.
+   - **Mac:** `CloudDirStat-…-macos.dmg`. Open it and drag **CloudDirStat** to **Applications**. It runs natively on both Apple Silicon and Intel Macs. The first start needs one extra step, and the command line is a separate download: see [On a Mac](#on-a-mac).
    - **Windows and Linux** (x64 or ARM64): the archive for your system. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
 2. **Sign in** to your cloud with its own command-line tool. This is a one-time step; see [Connect to your cloud](#connect-to-your-cloud) for details and for key-based sign-in.
 
@@ -54,7 +53,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
    | Google Cloud | `gcloud auth application-default login` |
    | Azure | `az login` |
 
-3. **Scan.** Start `clouddirstat-gui`, choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
+3. **Scan.** Start the app (**CloudDirStat** on a Mac, `clouddirstat-gui` on Windows and Linux), choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
 
    ```sh
    clouddirstat scan s3://my-bucket
@@ -62,11 +61,27 @@ The project is in early development. If a Google or Azure scan fails or shows wr
    clouddirstat scan az://mystorageaccount/mycontainer
    ```
 
-The programs are not code-signed with a developer certificate yet, so the first start needs one extra step:
+The programs are not code-signed with a developer certificate yet. On Windows, SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway**. For the Mac, see below.
 
-- **Mac app:** open CloudDirStat once; macOS says it can't verify the developer. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to CloudDirStat. (Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`.)
-- **Mac command line:** clear the download quarantine with `xattr -d com.apple.quarantine clouddirstat`.
-- **Windows:** SmartScreen may warn about an unrecognized app; choose **More info → Run anyway**.
+### On a Mac
+
+**Opening the app the first time.** Until CloudDirStat is signed by a registered Apple developer, macOS blocks it the first time you open it and says it can't verify the developer. You only need to allow it once:
+
+- **macOS 15 Sequoia and later:** double-click **CloudDirStat** in Applications and close the warning (**Done**). Then open **System Settings → Privacy & Security**, scroll down to the message about CloudDirStat, click **Open Anyway**, and confirm. (Apple removed the right-click shortcut below in macOS 15.)
+- **macOS 14 Sonoma and earlier:** in Applications, right-click (or Control-click) **CloudDirStat**, choose **Open**, then click **Open** again in the dialog.
+- **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`
+
+**The command line is a separate download.** The DMG contains only the app. To use the `clouddirstat` command in Terminal, also download `clouddirstat-…-macos.tar.gz` (one program for both Apple Silicon and Intel Macs) and install it:
+
+```sh
+cd ~/Downloads
+tar -xzf clouddirstat-*-macos.tar.gz        # skip if Safari already unpacked it
+cd clouddirstat-*-macos/
+xattr -d com.apple.quarantine clouddirstat  # allow it to run (not code-signed yet)
+sudo mkdir -p /usr/local/bin
+sudo mv clouddirstat /usr/local/bin/        # or any folder on your PATH
+clouddirstat --version
+```
 
 ## Locations
 

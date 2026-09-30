@@ -19,6 +19,7 @@ mod treemap_view;
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use clouddirstat_providers::azure::AzureCredentials;
+use clouddirstat_providers::gcs::GcsCredentials;
 use clouddirstat_providers::s3::CredentialSource;
 use clouddirstat_providers::{Credentials, Location};
 use eframe::egui;
@@ -59,8 +60,8 @@ fn main() -> Result<()> {
             aws: CredentialSource::Chain {
                 profile: cli.profile.clone(),
             },
+            gcs: GcsCredentials::from_env(),
             azure: AzureCredentials::from_env(),
-            ..Credentials::default()
         },
         include_versions: cli.versions,
     });

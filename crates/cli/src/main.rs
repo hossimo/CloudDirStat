@@ -73,10 +73,8 @@ impl TargetArgs {
                 profile: self.profile.clone(),
             },
             gcs: GcsCredentials {
-                access_token: std::env::var("GOOGLE_OAUTH_ACCESS_TOKEN")
-                    .ok()
-                    .filter(|token| !token.trim().is_empty()),
                 project: self.project.clone(),
+                ..GcsCredentials::from_env()
             },
             azure: AzureCredentials::from_env(),
         };

@@ -67,8 +67,8 @@ pub struct CredentialsForm {
 }
 
 impl CredentialsForm {
-    /// Starts with `profile`, and with the Azure key or SAS from the environment (or
-    /// .env) when one is set.
+    /// Starts with `profile`, and with the Google access token and the Azure key or SAS
+    /// from the environment (or .env) when they are set.
     pub fn new(profile: Option<String>) -> Self {
         let azure = AzureCredentials::from_env();
         let azure_mode = if azure.account_key.is_some() {
@@ -78,8 +78,15 @@ impl CredentialsForm {
         } else {
             AzureMode::Cli
         };
+        let google = GcsCredentials::from_env();
+        let google_mode = match google.access_token {
+            Some(_) => GoogleMode::AccessToken,
+            None => GoogleMode::Login,
+        };
         Self {
             profile: profile.unwrap_or_default(),
+            google_mode,
+            google_token: google.access_token.unwrap_or_default(),
             azure_mode,
             azure_sas: azure.sas.unwrap_or_default(),
             azure_account_key: azure.account_key.unwrap_or_default(),

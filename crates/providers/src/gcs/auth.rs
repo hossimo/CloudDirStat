@@ -35,6 +35,20 @@ pub struct GcsCredentials {
     pub project: Option<String>,
 }
 
+impl GcsCredentials {
+    /// An access token from GOOGLE_OAUTH_ACCESS_TOKEN (the variable gcloud and the
+    /// Google client libraries use), if set. With none, Application Default Credentials
+    /// sign in. The project comes from elsewhere (see [`GcsCredentials::project`]).
+    pub fn from_env() -> Self {
+        Self {
+            access_token: std::env::var("GOOGLE_OAUTH_ACCESS_TOKEN")
+                .ok()
+                .filter(|token| !token.trim().is_empty()),
+            project: None,
+        }
+    }
+}
+
 impl fmt::Debug for GcsCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GcsCredentials")
@@ -212,8 +226,8 @@ impl TokenSource {
 fn no_credentials() -> Error {
     Error::Credentials(
         "no Google credentials found. Run `gcloud auth application-default login`, set \
-         GOOGLE_APPLICATION_CREDENTIALS to a service account key file, or paste an access \
-         token"
+         GOOGLE_APPLICATION_CREDENTIALS to a service account key file, or use an access \
+         token (choose Access token, or set GOOGLE_OAUTH_ACCESS_TOKEN)"
             .to_owned(),
     )
 }

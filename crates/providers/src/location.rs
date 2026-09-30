@@ -17,6 +17,24 @@ pub enum Provider {
 }
 
 impl Provider {
+    pub const ALL: [Provider; 3] = [Self::S3, Self::Gcs, Self::Azure];
+
+    /// The start of this provider's locations: `s3://`, `gs://`, or `az://`.
+    pub fn scheme(self) -> &'static str {
+        match self {
+            Self::S3 => "s3://",
+            Self::Gcs => "gs://",
+            Self::Azure => "az://",
+        }
+    }
+
+    /// The provider whose scheme `scheme` is, without the `://` (`"s3"`, `"gs"`, `"az"`).
+    pub fn from_scheme(scheme: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.scheme().strip_suffix("://") == Some(scheme))
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::S3 => "Amazon S3",
@@ -97,11 +115,15 @@ impl FromStr for Location {
     type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Error> {
-        match input.split_once("://") {
-            Some(("s3", _)) | None => input.parse().map(Self::S3),
-            Some(("gs", _)) => input.parse().map(Self::Gcs),
-            Some(("az", _)) => input.parse().map(Self::Azure),
-            Some(_) => Err(Error::InvalidLocation(input.to_owned())),
+        let provider = match input.split_once("://") {
+            None => Provider::S3,
+            Some((scheme, _)) => Provider::from_scheme(scheme)
+                .ok_or_else(|| Error::InvalidLocation(input.to_owned()))?,
+        };
+        match provider {
+            Provider::S3 => input.parse().map(Self::S3),
+            Provider::Gcs => input.parse().map(Self::Gcs),
+            Provider::Azure => input.parse().map(Self::Azure),
         }
     }
 }

@@ -5,7 +5,7 @@ use eframe::egui::{self, Align, Label, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
 use crate::palette::Colors;
-use crate::tree_view::right_aligned;
+use crate::tree_view::{date_label, right_aligned};
 
 const ROW_HEIGHT: f32 = 20.0;
 const DEFAULT_COUNT: usize = 50;
@@ -102,9 +102,18 @@ impl LargestFiles {
             .column(Column::initial(90.0).at_least(50.0).clip(true))
             .column(Column::initial(90.0).at_least(50.0).clip(true))
             .column(Column::initial(150.0).at_least(60.0).clip(true))
+            .column(Column::initial(100.0).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(100.0).clip(true))
             .header(ROW_HEIGHT, |mut header| {
-                for title in ["Name", "Size", "Cost/mo", "Storage class", "Folder"] {
+                let titles = [
+                    "Name",
+                    "Size",
+                    "Cost/mo",
+                    "Storage class",
+                    "Last modified",
+                    "Folder",
+                ];
+                for title in titles {
                     header.col(|ui| {
                         ui.strong(title);
                     });
@@ -195,6 +204,7 @@ fn bucket_row(
     table_row.col(|ui| right_aligned(ui, format_bytes(usage.bytes)));
     table_row.col(|ui| right_aligned(ui, format_usd(usage.monthly_cost)));
     table_row.col(|_| {});
+    table_row.col(|ui| date_label(ui, view.last_modified(bucket)));
     table_row.col(|_| {});
     arrow_clicked
 }
@@ -217,6 +227,7 @@ fn file_row(
     table_row.col(|ui| {
         ui.add(Label::new(tree.storage_class(file).unwrap_or("")).selectable(false));
     });
+    table_row.col(|ui| date_label(ui, tree.node(file).last_modified()));
     table_row.col(|ui| {
         let folder = tree.node(file).parent().map(|parent| tree.path(parent));
         let folder = folder.as_deref().unwrap_or("");

@@ -155,6 +155,7 @@ mod tests {
                 size,
                 storage_class: "STANDARD".to_owned(),
                 kind: EntryKind::Current,
+                last_modified: None,
             });
         }
         tree

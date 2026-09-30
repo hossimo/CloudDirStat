@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
 use crate::arena::{BlockVec, TextArena};
-use crate::{Cost, Entry, EntryKind, Pricing, Usage};
+use crate::{Cost, Date, Entry, EntryKind, Pricing, Usage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
@@ -127,6 +127,9 @@ pub struct Node {
     next_sibling: u32,
     storage_class: u16,
     file_type: u16,
+    /// Newest modification day of the object's versions, or of anything in the
+    /// folder, as days since 1970 (see [`Date`]); 0 when unknown.
+    modified: u16,
     kind: NodeKind,
     version_flags: u8,
 }
@@ -143,6 +146,7 @@ impl Node {
             next_sibling: NONE,
             storage_class: NO_CLASS,
             file_type: NO_FILE_TYPE,
+            modified: 0,
             kind,
             version_flags: 0,
         }
@@ -168,7 +172,16 @@ impl Node {
         }
     }
 
-    fn add(&mut self, usage: Usage) {
+    /// The newest modification day of this object's versions, or of anything in this
+    /// folder.
+    pub fn last_modified(&self) -> Option<Date> {
+        Date::from_days(self.modified)
+    }
+
+    fn add(&mut self, usage: Usage, modified: Option<Date>) {
+        if let Some(date) = modified {
+            self.modified = self.modified.max(date.days());
+        }
         self.bytes += usage.bytes;
         self.monthly_cost += usage.monthly_cost;
         let objects = u32::try_from(usage.objects).unwrap_or(u32::MAX);
@@ -246,8 +259,9 @@ impl Tree {
                 .unwrap_or_default(),
         };
 
+        let modified = entry.last_modified.and_then(Date::from_unix_seconds);
         let mut current = Self::ROOT;
-        self.nodes[current.index()].add(usage);
+        self.nodes[current.index()].add(usage, modified);
 
         let mut segments = entry.key.split('/').peekable();
         while let Some(segment) = segments.next() {
@@ -260,7 +274,7 @@ impl Tree {
             } else {
                 self.directory_or_insert(current, segment)
             };
-            self.nodes[current.index()].add(usage);
+            self.nodes[current.index()].add(usage, modified);
         }
 
         let class = self.add_storage_class_usage(&entry.storage_class, usage);
@@ -575,6 +589,7 @@ mod tests {
             size,
             storage_class: "STANDARD".to_owned(),
             kind: EntryKind::Current,
+            last_modified: None,
         }
     }
 
@@ -752,6 +767,33 @@ mod tests {
         assert_eq!(file_type("README"), "");
         assert_eq!(file_type("backup.2024-01-01T12-00"), "");
         assert_eq!(file_type("name.averyveryverylongsuffix"), "");
+    }
+
+    #[test]
+    fn last_modified_is_the_newest_below() {
+        let day = |day: u64| Some(day * 86_400);
+        let mut tree = Tree::new();
+        tree.insert(&Entry {
+            last_modified: day(100),
+            ..entry("logs/a.log", 1)
+        });
+        tree.insert(&Entry {
+            last_modified: day(300),
+            ..entry("logs/b.log", 1)
+        });
+        tree.insert(&Entry {
+            kind: EntryKind::Noncurrent,
+            last_modified: day(50),
+            ..entry("logs/b.log", 1)
+        });
+        tree.insert(&entry("undated", 1));
+
+        let modified = |path| tree.node(find(&tree, path)).last_modified().map(Date::days);
+        assert_eq!(modified("logs/a.log"), Some(100));
+        assert_eq!(modified("logs/b.log"), Some(300));
+        assert_eq!(modified("logs/"), Some(300));
+        assert_eq!(modified(""), Some(300));
+        assert_eq!(modified("undated"), None);
     }
 
     #[test]

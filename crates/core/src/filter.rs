@@ -1,14 +1,14 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 
-use crate::{NodeId, NodeKind, Tree, Usage};
+use crate::{Date, Node, NodeId, NodeKind, Tree, Usage};
 
 /// The objects that pass a filter, and what each folder adds up to when only those
 /// count. Memory grows with the number of folders, not objects: kept objects are one
 /// bit each.
 #[derive(Debug, Default)]
 pub struct Subset {
-    directories: HashMap<NodeId, Usage>,
+    directories: HashMap<NodeId, Totals>,
     objects: Vec<u64>,
 }
 
@@ -26,29 +26,40 @@ impl Subset {
         for index in (0..len).rev() {
             let id = NodeId::from_index(index);
             let node = tree.node(id);
-            let usage = match node.kind() {
+            let totals = match node.kind() {
                 NodeKind::Directory => match subset.directories.get(&id) {
-                    Some(&usage) => usage,
+                    Some(&totals) => totals,
                     None => continue,
                 },
                 NodeKind::Object if keep(id) => {
                     subset.objects[index / 64] |= 1 << (index % 64);
-                    node.usage()
+                    Totals::of(node)
                 }
                 NodeKind::Object => continue,
             };
             if let Some(parent) = node.parent() {
-                *subset.directories.entry(parent).or_default() += usage;
+                let parent = subset.directories.entry(parent).or_default();
+                parent.usage += totals.usage;
+                parent.last_modified = parent.last_modified.max(totals.last_modified);
             }
         }
         subset
     }
 
     pub fn usage(&self, tree: &Tree, id: NodeId) -> Usage {
-        match tree.node(id).kind() {
+        self.totals(tree, id).usage
+    }
+
+    pub fn last_modified(&self, tree: &Tree, id: NodeId) -> Option<Date> {
+        self.totals(tree, id).last_modified
+    }
+
+    fn totals(&self, tree: &Tree, id: NodeId) -> Totals {
+        let node = tree.node(id);
+        match node.kind() {
             NodeKind::Directory => self.directories.get(&id).copied().unwrap_or_default(),
-            NodeKind::Object if self.contains_object(id) => tree.node(id).usage(),
-            NodeKind::Object => Usage::default(),
+            NodeKind::Object if self.contains_object(id) => Totals::of(node),
+            NodeKind::Object => Totals::default(),
         }
     }
 
@@ -57,6 +68,22 @@ impl Subset {
         self.objects
             .get(index / 64)
             .is_some_and(|bits| bits & (1 << (index % 64)) != 0)
+    }
+}
+
+/// What the kept objects in a folder add up to.
+#[derive(Clone, Copy, Debug, Default)]
+struct Totals {
+    usage: Usage,
+    last_modified: Option<Date>,
+}
+
+impl Totals {
+    fn of(node: &Node) -> Self {
+        Self {
+            usage: node.usage(),
+            last_modified: node.last_modified(),
+        }
     }
 }
 
@@ -77,6 +104,13 @@ impl<'a> Filtered<'a> {
         match self.subset {
             Some(subset) => subset.usage(self.tree, id),
             None => self.tree.node(id).usage(),
+        }
+    }
+
+    pub fn last_modified(&self, id: NodeId) -> Option<Date> {
+        match self.subset {
+            Some(subset) => subset.last_modified(self.tree, id),
+            None => self.tree.node(id).last_modified(),
         }
     }
 
@@ -124,6 +158,8 @@ mod tests {
                 size,
                 storage_class: class.to_owned(),
                 kind: EntryKind::Current,
+                // Bigger files are newer, so the dates show which objects were kept.
+                last_modified: Some(size * 86_400),
             });
         }
         tree
@@ -153,6 +189,11 @@ mod tests {
             .find_child(Tree::ROOT, "logs", NodeKind::Directory)
             .unwrap();
         assert_eq!(view.usage(logs), Usage::new(130, 2));
+        assert_eq!(view.last_modified(logs).map(Date::days), Some(100));
+        assert_eq!(
+            tree.node(Tree::ROOT).last_modified().map(Date::days),
+            Some(400)
+        );
         assert_eq!(names(view, logs), ["a.log", "old"]);
         let largest: Vec<_> = view
             .largest_objects_in(Tree::ROOT, 5)

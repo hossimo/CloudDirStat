@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use clouddirstat_core::{Filtered, NodeId, NodeKind, Tree, format_bytes, format_count, format_usd};
+use clouddirstat_core::{
+    Date, Filtered, NodeId, NodeKind, Tree, format_bytes, format_count, format_usd,
+};
 use eframe::egui::{self, Align, Color32, Label, Sense};
 use egui_extras::{Column, TableBuilder};
 
@@ -9,10 +11,10 @@ use crate::palette::{self, Colors};
 const ROW_HEIGHT: f32 = 20.0;
 const INDENT: f32 = 16.0;
 const MIN_NAME_WIDTH: f32 = 150.0;
-/// Starting widths of size proportion, percent, size, and cost.
-const NUMBER_COLUMNS: [f32; 4] = [110.0, 70.0, 90.0, 100.0];
-/// Objects is last and fills the leftover width, but starts about this wide.
-const OBJECTS_WIDTH: f32 = 90.0;
+/// Starting widths of size proportion, percent, size, cost, and objects.
+const NUMBER_COLUMNS: [f32; 5] = [110.0, 70.0, 90.0, 100.0, 90.0];
+/// Last modified is last and fills the leftover width, but starts about this wide.
+const LAST_MODIFIED_WIDTH: f32 = 100.0;
 
 /// The folder list: one row per visible node, children sorted largest first.
 #[derive(Default)]
@@ -74,7 +76,7 @@ impl TreeView {
         // column keeps the width the user gives it, and the last column absorbs the
         // difference, so dragging a divider only moves columns to its right.
         let spacing = ui.spacing().item_spacing.x * (NUMBER_COLUMNS.len() + 1) as f32;
-        let others: f32 = NUMBER_COLUMNS.iter().sum::<f32>() + OBJECTS_WIDTH + spacing;
+        let others: f32 = NUMBER_COLUMNS.iter().sum::<f32>() + LAST_MODIFIED_WIDTH + spacing;
         let name_width = (ui.available_width() - others).max(MIN_NAME_WIDTH);
 
         let mut table = TableBuilder::new(ui)
@@ -105,6 +107,7 @@ impl TreeView {
                     "Size",
                     "Cost/mo",
                     "Objects",
+                    "Last modified",
                 ] {
                     header.col(|ui| {
                         ui.strong(title);
@@ -144,6 +147,7 @@ impl TreeView {
                     table_row.col(|ui| right_aligned(ui, format_bytes(usage.bytes)));
                     table_row.col(|ui| right_aligned(ui, format_usd(usage.monthly_cost)));
                     table_row.col(|ui| right_aligned(ui, format_count(usage.objects)));
+                    table_row.col(|ui| date_label(ui, view.last_modified(row.id)));
 
                     let response = table_row.response();
                     if response.clicked() {
@@ -227,6 +231,13 @@ fn proportion_bar(ui: &mut egui::Ui, fraction: f32) {
     let filled =
         egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, rect.height()));
     painter.rect_filled(filled, 2.0, Color32::from_rgb(0x6f, 0x8f, 0xc0));
+}
+
+/// A last-modified date, or nothing when it is unknown.
+pub fn date_label(ui: &mut egui::Ui, date: Option<Date>) {
+    if let Some(date) = date {
+        ui.add(Label::new(date.to_string()).selectable(false));
+    }
 }
 
 pub fn right_aligned(ui: &mut egui::Ui, text: String) {

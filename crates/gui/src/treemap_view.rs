@@ -160,6 +160,9 @@ fn node_tooltip(ui: &mut egui::Ui, view: Filtered, root: NodeId, id: NodeId) {
     if let Some(class) = tree.storage_class(id) {
         ui.label(class);
     }
+    if let Some(date) = view.last_modified(id) {
+        ui.label(format!("Last modified {date}"));
+    }
     if let Some(state) = tree
         .version_state(id)
         .filter(|&state| state != VersionState::Current)

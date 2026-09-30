@@ -10,6 +10,7 @@ use tokio::runtime::Runtime;
 use crate::credentials_form::CredentialsForm;
 use crate::filter::Filter;
 use crate::help::HelpWindow;
+use crate::largest_files::{self, LargestFiles};
 use crate::legend;
 use crate::palette::{ColorMode, Colors};
 use crate::scan::{Scan, ScanRequest, ScanState};
@@ -34,6 +35,13 @@ pub struct App {
     view: View,
 }
 
+/// Which list fills the middle of the window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListTab {
+    Folders,
+    LargestFiles,
+}
+
 /// Everything shown for the current scan. Replaced wholesale when a new scan starts.
 struct View {
     color_mode: ColorMode,
@@ -43,7 +51,9 @@ struct View {
     /// The objects that pass `filter`, recomputed with the colors.
     subset: Option<Subset>,
     selected: Option<NodeId>,
+    list: ListTab,
     tree_view: TreeView,
+    largest: LargestFiles,
     treemap: TreemapView,
     changed: bool,
     refreshed_at: Option<Instant>,
@@ -57,7 +67,9 @@ impl View {
             filter: None,
             subset: None,
             selected: None,
+            list: ListTab::Folders,
             tree_view: TreeView::default(),
+            largest: LargestFiles::default(),
             treemap: TreemapView::default(),
             changed: true,
             refreshed_at: None,
@@ -77,6 +89,7 @@ impl View {
             .as_ref()
             .map(|filter| filter.subset(&scan.tree, scan.root()));
         self.tree_view.invalidate();
+        self.largest.invalidate();
         self.treemap.invalidate();
         self.changed = false;
         self.refreshed_at = Some(Instant::now());
@@ -362,14 +375,38 @@ impl eframe::App for App {
                 clear_filter |= filter_bar(ui, &filter.label(tree), filtered, root);
                 ui.add_space(4.0);
             }
-            view.tree_view.show(
-                ui,
-                filtered,
-                root,
-                &scan.location.to_string(),
-                colors,
-                &mut view.selected,
-            );
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut view.list, ListTab::Folders, "Folders");
+                ui.selectable_value(&mut view.list, ListTab::LargestFiles, "Largest files");
+            });
+            match view.list {
+                ListTab::Folders => view.tree_view.show(
+                    ui,
+                    filtered,
+                    root,
+                    &scan.location.to_string(),
+                    colors,
+                    &mut view.selected,
+                ),
+                ListTab::LargestFiles => {
+                    let per_bucket = scan.location.is_all_buckets();
+                    let action =
+                        view.largest
+                            .show(ui, filtered, root, per_bucket, colors, view.selected);
+                    match action {
+                        Some(largest_files::Action::Select(file)) => {
+                            view.selected = Some(file);
+                            view.tree_view.reveal(tree, file);
+                        }
+                        Some(largest_files::Action::Reveal(file)) => {
+                            view.selected = Some(file);
+                            view.tree_view.reveal(tree, file);
+                            view.list = ListTab::Folders;
+                        }
+                        None => {}
+                    }
+                }
+            }
         });
 
         if clear_filter {

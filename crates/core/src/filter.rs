@@ -93,6 +93,16 @@ impl<'a> Filtered<'a> {
         children.sort_by_key(|&(_, usage)| Reverse(usage.bytes));
         children.into_iter().map(|(child, _)| child).collect()
     }
+
+    /// The `count` largest objects under `root` that pass the filter, largest first.
+    pub fn largest_objects_in(&self, root: NodeId, count: usize) -> Vec<NodeId> {
+        match self.subset {
+            Some(subset) => self
+                .tree
+                .largest_objects_where(root, count, |id| subset.contains_object(id)),
+            None => self.tree.largest_objects_in(root, count),
+        }
+    }
 }
 
 impl<'a> From<&'a Tree> for Filtered<'a> {
@@ -144,6 +154,12 @@ mod tests {
             .unwrap();
         assert_eq!(view.usage(logs), Usage::new(130, 2));
         assert_eq!(names(view, logs), ["a.log", "old"]);
+        let largest: Vec<_> = view
+            .largest_objects_in(Tree::ROOT, 5)
+            .into_iter()
+            .map(|id| tree.path(id))
+            .collect();
+        assert_eq!(largest, ["logs/a.log", "logs/old/c.log"]);
     }
 
     #[test]

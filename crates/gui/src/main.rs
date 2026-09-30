@@ -7,6 +7,7 @@ mod cushion;
 mod demo_scan;
 mod filter;
 mod help;
+mod largest_files;
 mod legend;
 mod palette;
 mod scan;

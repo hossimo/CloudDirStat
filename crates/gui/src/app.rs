@@ -402,7 +402,8 @@ impl eframe::App for App {
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| input.key_pressed(egui::Key::Escape));
 
-        if !scan.is_running() {
+        // Nothing to draw after a scan that failed or found nothing.
+        if !scan.is_running() && tree.total().objects > 0 {
             let available = ui.available_height();
             egui::Panel::bottom("treemap")
                 .resizable(true)

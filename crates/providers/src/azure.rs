@@ -30,7 +30,6 @@ const DEFAULT_TIER: &str = "Hot";
 const MAX_SPLIT_DEPTH: usize = 3;
 /// Containers in progress at the same time when scanning more than one.
 const CONTAINERS_AT_ONCE: usize = 16;
-const READER_ROLE: &str = "the Storage Blob Data Reader role";
 
 /// Lists one container, every container of an account, or every account.
 pub struct AzureScanner {
@@ -346,7 +345,7 @@ impl AzureScanner {
             }
             let response = self.auth.get(&self.http, &url, API_VERSION).await?;
             self.setup_requests += 1;
-            check(&response, "List Containers", account)?;
+            check(&response, "List Containers", self.auth.needs(true), account)?;
             let page = parse_containers(&response.text()).map_err(bad_xml)?;
             containers.extend(page.0);
             match page.1 {
@@ -463,7 +462,12 @@ impl Lister {
                 ));
                 continue;
             }
-            check(&response, "List Blobs", &self.container)?;
+            check(
+                &response,
+                "List Blobs",
+                self.auth.needs(false),
+                &self.container,
+            )?;
 
             let page = parse_blobs(&response.text()).map_err(bad_xml)?;
             let entries = page
@@ -512,9 +516,14 @@ impl Lister {
     }
 }
 
-/// Turns an error response from the Blob service into an [`Error`]. `what` is the
-/// container (or account) being listed.
-fn check(response: &Response, operation: &'static str, what: &str) -> Result<()> {
+/// Turns an error response from the Blob service into an [`Error`]. `permission` is
+/// what the listing needs; `what` is the container (or account) being listed.
+fn check(
+    response: &Response,
+    operation: &'static str,
+    permission: &'static str,
+    what: &str,
+) -> Result<()> {
     let error = azure_error(response);
     match response.status.as_u16() {
         200..=299 => Ok(()),
@@ -529,7 +538,7 @@ fn check(response: &Response, operation: &'static str, what: &str) -> Result<()>
         404 => Err(Error::NoSuchBucket(what.to_owned())),
         _ => Err(Error::Request {
             operation,
-            permission: READER_ROLE,
+            permission,
             message: error,
         }),
     }

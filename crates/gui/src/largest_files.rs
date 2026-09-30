@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use clouddirstat_core::{NodeId, NodeKind, Tree, format_bytes, format_usd};
+use clouddirstat_core::{Filtered, NodeId, NodeKind, Tree, format_bytes, format_usd};
 use eframe::egui::{self, Align, Label, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
@@ -56,12 +56,13 @@ impl LargestFiles {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        tree: &Tree,
+        view: Filtered,
         root: NodeId,
         per_bucket: bool,
         colors: &Colors,
         selected: Option<NodeId>,
     ) -> Option<Action> {
+        let tree = view.tree;
         ui.horizontal(|ui| {
             ui.label("Largest");
             let changed = ui
@@ -87,7 +88,7 @@ impl LargestFiles {
             }
         });
         if self.stale {
-            self.rebuild(tree, root, per_bucket);
+            self.rebuild(view, root, per_bucket);
         }
 
         let mut action = None;
@@ -115,7 +116,7 @@ impl LargestFiles {
                     match row {
                         Row::Bucket(bucket) => {
                             let open = !self.collapsed.contains(&bucket);
-                            let arrow_clicked = bucket_row(&mut table_row, tree, bucket, open);
+                            let arrow_clicked = bucket_row(&mut table_row, view, bucket, open);
                             if arrow_clicked || table_row.response().clicked() {
                                 toggled = Some(bucket);
                             }
@@ -143,18 +144,18 @@ impl LargestFiles {
         action
     }
 
-    fn rebuild(&mut self, tree: &Tree, root: NodeId, per_bucket: bool) {
+    fn rebuild(&mut self, view: Filtered, root: NodeId, per_bucket: bool) {
         self.rows.clear();
         if per_bucket {
-            for bucket in tree.children_by_size(root) {
-                if tree.node(bucket).kind() != NodeKind::Directory {
+            for bucket in view.children_by_size(root) {
+                if view.tree.node(bucket).kind() != NodeKind::Directory {
                     continue;
                 }
                 self.rows.push(Row::Bucket(bucket));
                 if self.collapsed.contains(&bucket) {
                     continue;
                 }
-                let files = tree.largest_objects_in(bucket, self.count);
+                let files = view.largest_objects_in(bucket, self.count);
                 self.rows.extend(
                     files
                         .into_iter()
@@ -162,7 +163,7 @@ impl LargestFiles {
                 );
             }
         } else {
-            let files = tree.largest_objects_in(root, self.count);
+            let files = view.largest_objects_in(root, self.count);
             self.rows
                 .extend(files.into_iter().map(|file| Row::File { file, base: root }));
         }
@@ -173,11 +174,12 @@ impl LargestFiles {
 /// A bucket heading with a disclosure arrow. Returns whether the arrow was clicked.
 fn bucket_row(
     table_row: &mut egui_extras::TableRow<'_, '_>,
-    tree: &Tree,
+    view: Filtered,
     bucket: NodeId,
     open: bool,
 ) -> bool {
-    let usage = tree.node(bucket).usage();
+    let tree = view.tree;
+    let usage = view.usage(bucket);
     let mut arrow_clicked = false;
     table_row.col(|ui| {
         let (_, arrow) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());

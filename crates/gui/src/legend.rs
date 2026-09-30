@@ -4,6 +4,7 @@ use clouddirstat_core::{
 use eframe::egui::{self, Align, Color32, Label, Sense};
 use egui_extras::{Column, TableBuilder};
 
+use crate::filter::{Filter, MAX_FILE_TYPE_ROWS, file_type_label};
 use crate::palette::{self, ColorMode, Colors};
 use crate::tree_view::right_aligned;
 
@@ -11,12 +12,12 @@ struct LegendRow {
     color: Option<Color32>,
     label: String,
     usage: Usage,
-    /// The folder this row stands for, if clicking it should select one.
-    node: Option<NodeId>,
+    /// What clicking this row filters the views to, if anything.
+    filter: Option<Filter>,
 }
 
 /// The right-hand panel: tabs pick what the treemap is colored by, and the list
-/// below explains the colors. Returns the prefix the user clicked, if any.
+/// below explains the colors. Returns the filter of the row the user clicked, if any.
 pub fn show(
     ui: &mut egui::Ui,
     tree: &Tree,
@@ -24,39 +25,40 @@ pub fn show(
     mode: &mut ColorMode,
     colors: &Colors,
     versions_scanned: bool,
-    selected: Option<NodeId>,
-) -> Option<NodeId> {
+    active: Option<&Filter>,
+) -> Option<Filter> {
     ui.horizontal(|ui| {
         for option in ColorMode::ALL {
             ui.selectable_value(mode, option, option.label());
         }
     });
+    ui.weak("Click a row to show only its objects; click it again to show everything.");
     ui.separator();
 
     let total = tree.node(root).usage();
     egui::ScrollArea::vertical()
         .show(ui, |ui| match *mode {
             ColorMode::StorageClass => {
-                table(ui, "Storage class", &storage_class_rows(tree), total, None)
+                table(ui, "Storage class", &storage_class_rows(tree), total, active)
             }
             ColorMode::Prefixes => {
                 let rows = prefix_rows(tree, root, colors);
-                table(ui, "Prefix", &rows, total, selected)
+                table(ui, "Prefix", &rows, total, active)
             }
             ColorMode::FileTypes => {
-                table(ui, "File type", &file_type_rows(tree, colors), total, None)
+                table(ui, "File type", &file_type_rows(tree, colors), total, active)
             }
             ColorMode::Versions => {
-                table(ui, "Object state", &version_state_rows(tree), total, None);
+                let clicked = table(ui, "Object state", &version_state_rows(tree), total, active);
                 ui.add_space(12.0);
-                table(ui, "Version type", &entry_kind_rows(tree), total, None);
+                table(ui, "Version type", &entry_kind_rows(tree), total, active);
                 if !versions_scanned {
                     ui.add_space(12.0);
                     ui.weak(
                         "Scan with Versions checked to include noncurrent versions and delete markers.",
                     );
                 }
-                None
+                clicked
             }
         })
         .inner
@@ -69,7 +71,7 @@ fn storage_class_rows(tree: &Tree) -> Vec<LegendRow> {
             color: Some(palette::storage_class(class)),
             label: class.to_owned(),
             usage,
-            node: None,
+            filter: Some(Filter::StorageClass(class.to_owned())),
         })
         .collect()
 }
@@ -81,7 +83,7 @@ fn version_state_rows(tree: &Tree) -> Vec<LegendRow> {
             color: Some(palette::version_state(state)),
             label: state.label().to_owned(),
             usage: tree.usage_by_version_state(state),
-            node: None,
+            filter: Some(Filter::VersionState(state)),
         })
         .collect()
 }
@@ -93,7 +95,8 @@ fn entry_kind_rows(tree: &Tree) -> Vec<LegendRow> {
             color: None,
             label: kind.label().to_owned(),
             usage: tree.usage_by_kind(kind),
-            node: None,
+            // Objects can mix versions of several kinds, so these rows don't filter.
+            filter: None,
         })
         .collect()
 }
@@ -106,13 +109,9 @@ fn file_type_rows(tree: &Tree, colors: &Colors) -> Vec<LegendRow> {
         .take(MAX_FILE_TYPE_ROWS)
         .map(|&(file_type, usage)| LegendRow {
             color: Some(colors.file_type(file_type).unwrap_or(colors.other())),
-            label: if file_type.is_empty() {
-                "(no extension)".to_owned()
-            } else {
-                format!(".{file_type}")
-            },
+            label: file_type_label(file_type),
             usage,
-            node: None,
+            filter: Some(Filter::FileType(file_type.to_owned())),
         })
         .collect();
 
@@ -126,7 +125,7 @@ fn file_type_rows(tree: &Tree, colors: &Colors) -> Vec<LegendRow> {
             color: Some(colors.other()),
             label: format!("{} more types", rest.len()),
             usage,
-            node: None,
+            filter: Some(Filter::OtherFileTypes),
         });
     }
     rows
@@ -143,7 +142,7 @@ fn prefix_rows(tree: &Tree, root: NodeId, colors: &Colors) -> Vec<LegendRow> {
                 color: colors.prefix(prefix),
                 label: format!("{}/", tree.name(prefix)),
                 usage,
-                node: Some(prefix),
+                filter: Some(Filter::Prefix(prefix)),
             }
         })
         .collect();
@@ -152,24 +151,23 @@ fn prefix_rows(tree: &Tree, root: NodeId, colors: &Colors) -> Vec<LegendRow> {
             color: Some(colors.other()),
             label: "Everything else".to_owned(),
             usage: other,
-            node: None,
+            filter: Some(Filter::OtherPrefixes),
         });
     }
     rows
 }
 
 const ROW_HEIGHT: f32 = 20.0;
-const MAX_FILE_TYPE_ROWS: usize = 50;
 
 /// A table with resizable columns. Tables are keyed by `title`, so each one keeps its
-/// own column widths. Returns the node of the row that was clicked, if any.
+/// own column widths. Returns the filter of the row that was clicked, if any.
 fn table(
     ui: &mut egui::Ui,
     title: &str,
     rows: &[LegendRow],
     total: Usage,
-    selected: Option<NodeId>,
-) -> Option<NodeId> {
+    active: Option<&Filter>,
+) -> Option<Filter> {
     let mut clicked = None;
     ui.push_id(title, |ui| {
         TableBuilder::new(ui)
@@ -193,7 +191,8 @@ fn table(
             .body(|mut body| {
                 for row in rows {
                     body.row(ROW_HEIGHT, |mut table_row| {
-                        table_row.set_selected(row.node.is_some() && row.node == selected);
+                        table_row
+                            .set_selected(row.filter.is_some() && row.filter.as_ref() == active);
                         table_row.col(|ui| {
                             swatch(ui, row.color);
                             ui.add(Label::new(&row.label).truncate());
@@ -205,8 +204,8 @@ fn table(
                         });
                         table_row.col(|ui| right_aligned(ui, format_usd(row.usage.monthly_cost)));
                         table_row.col(|ui| right_aligned(ui, format_count(row.usage.objects)));
-                        if table_row.response().clicked() && row.node.is_some() {
-                            clicked = row.node;
+                        if table_row.response().clicked() && row.filter.is_some() {
+                            clicked = row.filter.clone();
                         }
                     });
                 }

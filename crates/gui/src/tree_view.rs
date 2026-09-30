@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use clouddirstat_core::{NodeId, NodeKind, Tree, format_bytes, format_count, format_usd};
+use clouddirstat_core::{Filtered, NodeId, NodeKind, Tree, format_bytes, format_count, format_usd};
 use eframe::egui::{self, Align, Color32, Label, Sense};
 use egui_extras::{Column, TableBuilder};
 
@@ -49,7 +49,7 @@ impl TreeView {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        tree: &Tree,
+        view: Filtered,
         root: NodeId,
         root_label: &str,
         colors: &Colors,
@@ -60,8 +60,9 @@ impl TreeView {
             self.expanded.insert(root);
             self.stale = true;
         }
+        let tree = view.tree;
         if self.stale {
-            self.rebuild_rows(tree, root);
+            self.rebuild_rows(view, root);
         }
 
         let scroll_row = self
@@ -114,6 +115,7 @@ impl TreeView {
                 body.rows(ROW_HEIGHT, self.rows.len(), |mut table_row| {
                     let row = self.rows[table_row.index()];
                     let node = tree.node(row.id);
+                    let usage = view.usage(row.id);
                     table_row.set_selected(*selected == Some(row.id));
 
                     table_row.col(|ui| {
@@ -133,15 +135,15 @@ impl TreeView {
                     let parent_bytes = node
                         .parent()
                         .filter(|_| row.id != root)
-                        .map_or(node.usage().bytes, |parent| tree.node(parent).usage().bytes);
-                    let fraction = fraction(node.usage().bytes, parent_bytes);
+                        .map_or(usage.bytes, |parent| view.usage(parent).bytes);
+                    let fraction = fraction(usage.bytes, parent_bytes);
                     table_row.col(|ui| proportion_bar(ui, fraction));
                     table_row.col(|ui| {
                         right_aligned(ui, format!("{:.1}%", fraction * 100.0));
                     });
-                    table_row.col(|ui| right_aligned(ui, format_bytes(node.usage().bytes)));
-                    table_row.col(|ui| right_aligned(ui, format_usd(node.usage().monthly_cost)));
-                    table_row.col(|ui| right_aligned(ui, format_count(node.usage().objects)));
+                    table_row.col(|ui| right_aligned(ui, format_bytes(usage.bytes)));
+                    table_row.col(|ui| right_aligned(ui, format_usd(usage.monthly_cost)));
+                    table_row.col(|ui| right_aligned(ui, format_count(usage.objects)));
 
                     let response = table_row.response();
                     if response.clicked() {
@@ -178,13 +180,13 @@ impl TreeView {
         response.clicked()
     }
 
-    fn rebuild_rows(&mut self, tree: &Tree, root: NodeId) {
+    fn rebuild_rows(&mut self, view: Filtered, root: NodeId) {
         self.rows.clear();
         let mut pending = vec![Row { id: root, depth: 0 }];
         while let Some(row) = pending.pop() {
             self.rows.push(row);
             if self.expanded.contains(&row.id) {
-                let children = tree.children_by_size(row.id);
+                let children = view.children_by_size(row.id);
                 pending.extend(children.into_iter().rev().map(|id| Row {
                     id,
                     depth: row.depth.saturating_add(1),

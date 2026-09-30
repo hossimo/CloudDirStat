@@ -9,7 +9,11 @@ use crate::{Cost, Entry, EntryKind, Pricing, Usage};
 pub struct NodeId(u32);
 
 impl NodeId {
-    fn index(self) -> usize {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -289,6 +293,12 @@ impl Tree {
         }
     }
 
+    /// Number of nodes, including the root. Node ids run from 0 to `node_count() - 1`, and
+    /// every node comes after its parent.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id.index()]
     }
@@ -410,11 +420,22 @@ impl Tree {
 
     /// The `count` largest objects anywhere under `root`, largest first.
     pub fn largest_objects_in(&self, root: NodeId, count: usize) -> Vec<NodeId> {
+        self.largest_objects_where(root, count, |_| true)
+    }
+
+    /// Like [`Tree::largest_objects_in`], counting only objects for which `keep` is true.
+    pub(crate) fn largest_objects_where(
+        &self,
+        root: NodeId,
+        count: usize,
+        keep: impl Fn(NodeId) -> bool,
+    ) -> Vec<NodeId> {
         let mut pending = vec![root];
         let objects = std::iter::from_fn(move || {
             while let Some(id) = pending.pop() {
                 match self.node(id).kind {
-                    NodeKind::Object => return Some(id),
+                    NodeKind::Object if keep(id) => return Some(id),
+                    NodeKind::Object => {}
                     NodeKind::Directory => pending.extend(self.children(id)),
                 }
             }

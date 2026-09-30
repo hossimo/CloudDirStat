@@ -1,4 +1,4 @@
-use crate::{NodeId, NodeKind, Tree};
+use crate::{Filtered, NodeId, NodeKind};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -28,44 +28,46 @@ impl Rect {
 /// children in the result, so drawing in order paints files on top of their folders.
 /// Nodes smaller than `min_area` (and everything under them) are left out, which keeps
 /// the output bounded by the number of visible pixels rather than the number of objects.
-pub fn squarify(tree: &Tree, root: NodeId, bounds: Rect, min_area: f32) -> Vec<(NodeId, Rect)> {
+/// Pass a [`Filtered`] view to lay out only the objects that pass a filter.
+pub fn squarify<'a>(
+    view: impl Into<Filtered<'a>>,
+    root: NodeId,
+    bounds: Rect,
+    min_area: f32,
+) -> Vec<(NodeId, Rect)> {
+    let view = view.into();
     let mut out = vec![(root, bounds)];
     let mut pending = vec![(root, bounds)];
 
     while let Some((parent, rect)) = pending.pop() {
         let first_child = out.len();
-        layout_children(tree, parent, rect, min_area, &mut out);
+        layout_children(view, parent, rect, min_area, &mut out);
         pending.extend(
             out[first_child..]
                 .iter()
-                .filter(|&&(id, _)| tree.node(id).kind() == NodeKind::Directory),
+                .filter(|&&(id, _)| view.tree.node(id).kind() == NodeKind::Directory),
         );
     }
     out
 }
 
 fn layout_children(
-    tree: &Tree,
+    view: Filtered,
     parent: NodeId,
     rect: Rect,
     min_area: f32,
     out: &mut Vec<(NodeId, Rect)>,
 ) {
-    let parent_bytes = tree.node(parent).usage().bytes;
+    let parent_bytes = view.usage(parent).bytes;
     if parent_bytes == 0 || rect.area() <= 0.0 {
         return;
     }
 
     let scale = f64::from(rect.area()) / parent_bytes as f64;
-    let areas: Vec<(NodeId, f32)> = tree
+    let areas: Vec<(NodeId, f32)> = view
         .children_by_size(parent)
         .into_iter()
-        .map(|child| {
-            (
-                child,
-                (tree.node(child).usage().bytes as f64 * scale) as f32,
-            )
-        })
+        .map(|child| (child, (view.usage(child).bytes as f64 * scale) as f32))
         .take_while(|&(_, area)| area > 0.0 && area >= min_area)
         .collect();
 
@@ -141,7 +143,7 @@ fn place_row(row: &[(NodeId, f32)], remaining: &mut Rect, out: &mut Vec<(NodeId,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Entry, EntryKind};
+    use crate::{Entry, EntryKind, Tree};
 
     const EPSILON: f32 = 1e-3;
 

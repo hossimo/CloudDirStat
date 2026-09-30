@@ -9,6 +9,7 @@ use eframe::egui;
 use tokio::runtime::Runtime;
 
 use crate::credentials_form::CredentialsForm;
+use crate::error_view;
 use crate::estimate_view::{self, EstimateTask};
 use crate::filter::Filter;
 use crate::help::HelpWindow;
@@ -226,7 +227,8 @@ impl App {
         let mut submitted = false;
         let mut scan_clicked = false;
         let mut estimate_clicked = false;
-        ui.horizontal(|ui| {
+        // Wraps onto a second line in a narrow window instead of running off the edge.
+        ui.horizontal_wrapped(|ui| {
             ui.label("Location");
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location_input)
@@ -280,7 +282,7 @@ impl App {
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if let Some(error) = &self.input_error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                error_view::chip(ui, error);
                 return;
             }
             let Some(scan) = &self.scan else {
@@ -321,9 +323,10 @@ impl App {
                 ui.separator();
             }
             match &scan.state {
+                // The summary comes last and is cut off to fit, so the progress bar
+                // and warnings stay visible in a narrow window.
                 ScanState::Running => {
                     ui.spinner();
-                    ui.label(format!("Scanning {summary}  ({elapsed:.0}s)"));
                     if let Some(expected) = scan.expected_objects {
                         let fraction = total.objects as f32 / expected as f32;
                         ui.add(
@@ -337,22 +340,28 @@ impl App {
                             format_count(expected)
                         ));
                     }
+                    fitted(ui, format!("Scanning {summary}  ({elapsed:.0}s)"));
                 }
                 ScanState::Finished { stats, .. } => {
-                    ui.label(format!(
-                        "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests (~${:.4})",
-                        format_count(stats.list_requests),
-                        stats.estimated_cost_usd()
-                    ));
                     warnings(ui, stats);
+                    fitted(
+                        ui,
+                        format!(
+                            "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests \
+                             (~${:.4})",
+                            format_count(stats.list_requests),
+                            stats.estimated_cost_usd()
+                        ),
+                    );
                 }
                 ScanState::Stopped { .. } => {
-                    ui.label(format!(
-                        "{summary}  ·  stopped after {elapsed:.1}s (partial)"
-                    ));
+                    fitted(
+                        ui,
+                        format!("{summary}  ·  stopped after {elapsed:.1}s (partial)"),
+                    );
                 }
                 ScanState::Failed(error) => {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    error_view::chip(ui, error);
                 }
             }
         });
@@ -388,6 +397,19 @@ impl eframe::App for App {
             });
             return;
         };
+        // A scan that failed before finding anything has nothing to show but the error,
+        // which gets the room the lists would have used.
+        if let ScanState::Failed(error) = &scan.state
+            && scan.tree.total().objects == 0
+        {
+            let action = egui::CentralPanel::default()
+                .show(ui, |ui| error_view::card(ui, "Scan failed", error))
+                .inner;
+            if let Some(error_view::Action::Help) = action {
+                self.help.open();
+            }
+            return;
+        }
         let view = &mut self.view;
         let Some(colors) = &view.colors else {
             return;
@@ -402,7 +424,8 @@ impl eframe::App for App {
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| input.key_pressed(egui::Key::Escape));
 
-        if !scan.is_running() {
+        // Nothing to draw after a scan that failed or found nothing.
+        if !scan.is_running() && tree.total().objects > 0 {
             let available = ui.available_height();
             egui::Panel::bottom("treemap")
                 .resizable(true)
@@ -612,6 +635,11 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
             .inner
         })
         .inner
+}
+
+/// A label cut off with "…" to fit the space left; hovering shows all of it.
+fn fitted(ui: &mut egui::Ui, text: String) {
+    ui.add(egui::Label::new(text).truncate());
 }
 
 /// Skipped buckets and checks that could not run, with the details on hover.

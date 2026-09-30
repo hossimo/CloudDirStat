@@ -8,6 +8,7 @@ use egui_extras::{Column, TableBuilder};
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
+use crate::error_view;
 use crate::palette;
 use crate::scan::ScanRequest;
 use crate::tree_view::right_aligned;
@@ -94,7 +95,7 @@ impl EstimateTask {
                     });
                 }
                 State::Failed(error, cloudwatch) => {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    error_view::block(ui, error);
                     if *cloudwatch {
                         ui.weak(
                             "Estimates read S3's daily storage metrics from CloudWatch, which \

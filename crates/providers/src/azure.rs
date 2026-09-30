@@ -30,7 +30,6 @@ const DEFAULT_TIER: &str = "Hot";
 const MAX_SPLIT_DEPTH: usize = 3;
 /// Containers in progress at the same time when scanning more than one.
 const CONTAINERS_AT_ONCE: usize = 16;
-const READER_ROLE: &str = "the Storage Blob Data Reader role";
 
 /// Lists one container, every container of an account, or every account.
 pub struct AzureScanner {
@@ -346,7 +345,7 @@ impl AzureScanner {
             }
             let response = self.auth.get(&self.http, &url, API_VERSION).await?;
             self.setup_requests += 1;
-            check(&response, "List Containers", account)?;
+            check(&response, "List Containers", self.auth.needs(true), account)?;
             let page = parse_containers(&response.text()).map_err(bad_xml)?;
             containers.extend(page.0);
             match page.1 {
@@ -463,7 +462,12 @@ impl Lister {
                 ));
                 continue;
             }
-            check(&response, "List Blobs", &self.container)?;
+            check(
+                &response,
+                "List Blobs",
+                self.auth.needs(false),
+                &self.container,
+            )?;
 
             let page = parse_blobs(&response.text()).map_err(bad_xml)?;
             let entries = page
@@ -512,9 +516,14 @@ impl Lister {
     }
 }
 
-/// Turns an error response from the Blob service into an [`Error`]. `what` is the
-/// container (or account) being listed.
-fn check(response: &Response, operation: &'static str, what: &str) -> Result<()> {
+/// Turns an error response from the Blob service into an [`Error`]. `permission` is
+/// what the listing needs; `what` is the container (or account) being listed.
+fn check(
+    response: &Response,
+    operation: &'static str,
+    permission: &'static str,
+    what: &str,
+) -> Result<()> {
     let error = azure_error(response);
     match response.status.as_u16() {
         200..=299 => Ok(()),
@@ -522,6 +531,19 @@ fn check(response: &Response, operation: &'static str, what: &str) -> Result<()>
         403 if error.starts_with("AuthenticationFailed") => Err(Error::Credentials(format!(
             "Azure rejected the credentials ({error}). Check the account key or SAS token."
         ))),
+        // Only Azure CLI tokens get a 401. A token Azure understands but won't take here
+        // is usually from another tenant than the storage account's.
+        401 if error.starts_with("InvalidAuthenticationInfo") => {
+            let tenant = response
+                .header("www-authenticate")
+                .and_then(tenant_of_challenge)
+                .unwrap_or("TENANT_ID");
+            Err(Error::Credentials(format!(
+                "Azure rejected the Azure CLI's sign-in ({error}). The storage account is \
+                 probably in a different Azure tenant than the one `az login` signed in to: run \
+                 `az login --tenant {tenant}`, or use a SAS token or account key."
+            )))
+        }
         401 => Err(Error::Credentials(format!(
             "Azure rejected the credentials ({error}). Run `az login` to sign in again, or check \
              the SAS token or account key.",
@@ -529,10 +551,26 @@ fn check(response: &Response, operation: &'static str, what: &str) -> Result<()>
         404 => Err(Error::NoSuchBucket(what.to_owned())),
         _ => Err(Error::Request {
             operation,
-            permission: READER_ROLE,
+            permission,
             message: error,
         }),
     }
+}
+
+/// The tenant a 401's `WWW-Authenticate` challenge asks for:
+/// `Bearer authorization_uri=https://login.microsoftonline.com/TENANT/oauth2/authorize ...`.
+fn tenant_of_challenge(challenge: &str) -> Option<&str> {
+    let uri = challenge
+        .split([' ', ','])
+        .find_map(|part| part.strip_prefix("authorization_uri="))?
+        .trim_matches('"');
+    let path = uri.split_once("://")?.1.split_once('/')?.1;
+    let tenant = path.split('/').next()?;
+    let valid = !tenant.is_empty()
+        && tenant
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'));
+    valid.then_some(tenant)
 }
 
 /// A container name as a URL path segment. `$` (in `$web`, `$logs`, `$root`) is legal in
@@ -736,6 +774,18 @@ mod tests {
         assert!(page.blobs[1].version && !page.blobs[1].current_version);
         assert_eq!(page.blobs[2].name, "odd\u{1}name");
         assert!(page.blobs[2].deleted);
+    }
+
+    #[test]
+    fn finds_the_tenant_in_a_bearer_challenge() {
+        let challenge = "Bearer authorization_uri=https://login.microsoftonline.com/\
+                         00000000-1111-2222-3333-444444444444/oauth2/authorize \
+                         resource_id=https://storage.azure.com";
+        assert_eq!(
+            tenant_of_challenge(challenge),
+            Some("00000000-1111-2222-3333-444444444444")
+        );
+        assert_eq!(tenant_of_challenge("Bearer realm=\"x\""), None);
     }
 
     #[test]

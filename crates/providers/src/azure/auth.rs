@@ -57,10 +57,21 @@ impl AzureCredentials {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         };
-        Self {
-            sas: var("AZURE_STORAGE_SAS_TOKEN"),
-            account_key: var("AZURE_STORAGE_KEY")
-                .or_else(|| var("AZURE_STORAGE_CONNECTION_STRING")),
+        Self::sorted(
+            var("AZURE_STORAGE_KEY").or_else(|| var("AZURE_STORAGE_CONNECTION_STRING")),
+            var("AZURE_STORAGE_SAS_TOKEN"),
+        )
+    }
+
+    /// Files a bare SAS given as a key or connection string under `sas`, so the GUI
+    /// opens on the right sign-in mode.
+    fn sorted(account_key: Option<String>, sas: Option<String>) -> Self {
+        match (account_key, sas) {
+            (Some(key), None) if is_bare_sas(&key) => Self {
+                sas: Some(key),
+                account_key: None,
+            },
+            (account_key, sas) => Self { sas, account_key },
         }
     }
 
@@ -80,6 +91,14 @@ impl AzureCredentials {
             (Some(key), _) if is_sas_connection_string(&key) => {
                 (sas_from_connection_string(&key, account)?, "a SAS token")
             }
+            // A bare SAS given where a key or connection string was expected.
+            (Some(key), _) if is_bare_sas(&key) => (
+                BlobAuth::Sas {
+                    query: clean_sas(&key),
+                    account: String::new(),
+                },
+                "a SAS token",
+            ),
             (Some(key), _) => (
                 BlobAuth::SharedKey(Box::new(SharedKey::new(&key, account)?)),
                 "an account key",
@@ -135,6 +154,21 @@ impl BlobAuth {
             Self::Cli(_) => "the Azure CLI",
             Self::Sas { .. } => "a SAS token",
             Self::SharedKey(_) => "an account key",
+        }
+    }
+
+    /// What a listing needs from these credentials, for "not authorized" errors.
+    /// Listing containers (as opposed to blobs) needs more from a SAS.
+    pub fn needs(&self, containers: bool) -> &'static str {
+        match (self, containers) {
+            (Self::Sas { .. }, true) => {
+                "a SAS for the Blob service with the Service and Container resource types and List permission"
+            }
+            (Self::Sas { .. }, false) => {
+                "a SAS for the Blob service with the Container resource type and List permission"
+            }
+            (Self::SharedKey(_), _) => "a valid account key",
+            (Self::Cli(_), _) => "the Storage Blob Data Reader role",
         }
     }
 
@@ -232,6 +266,13 @@ fn connection_field<'a>(connection_string: &'a str, name: &str) -> Option<&'a st
         .filter_map(|part| part.trim().split_once('='))
         .find(|(field, _)| field.eq_ignore_ascii_case(name))
         .map(|(_, value)| value)
+}
+
+/// A SAS query string (`sv=...&sig=...`) rather than a key or connection string. A key
+/// is base64, which has no `&`.
+fn is_bare_sas(text: &str) -> bool {
+    let text = text.trim_start_matches('?');
+    text.contains('&') && text.split('&').any(|part| part.starts_with("sig="))
 }
 
 fn is_sas_connection_string(text: &str) -> bool {
@@ -473,6 +514,33 @@ mod tests {
             clean_sas("?sv=2024&se=x\n  &sig=abc "),
             "sv=2024&se=x&sig=abc"
         );
+    }
+
+    #[test]
+    fn a_bare_sas_in_the_key_field_is_used_as_a_sas() {
+        let tokens = Arc::new(CliTokens::default());
+        let credentials = AzureCredentials {
+            sas: None,
+            account_key: Some("?sv=2024&ss=b&srt=c&sp=rl&sig=abc%3D".to_owned()),
+        };
+        match credentials.blob_auth("acct", &tokens).unwrap() {
+            BlobAuth::Sas { query, .. } => assert_eq!(query, "sv=2024&ss=b&srt=c&sp=rl&sig=abc%3D"),
+            _ => panic!("expected a SAS"),
+        }
+        // Like any SAS it doesn't name its account, so az:// can't use it.
+        assert!(credentials.blob_auth("", &tokens).is_err());
+    }
+
+    #[test]
+    fn a_bare_sas_from_the_environment_is_filed_as_a_sas() {
+        let sas = "sv=2024&sp=rl&sig=abc".to_owned();
+        let credentials = AzureCredentials::sorted(Some(sas.clone()), None);
+        assert_eq!(
+            (credentials.sas, credentials.account_key),
+            (Some(sas), None)
+        );
+        let key = AzureCredentials::sorted(Some("a2V5".to_owned()), None);
+        assert_eq!(key.account_key.as_deref(), Some("a2V5"));
     }
 
     #[test]

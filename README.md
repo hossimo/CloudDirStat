@@ -313,6 +313,27 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 
 Sessions from `aws login` and `aws sso login` expire. Run the login command again for that profile, then rescan.
 
+**Azure: which location goes with which sign-in**
+
+| Sign-in | `az://ACCOUNT/CONTAINER` | `az://ACCOUNT` (all containers) | `az://` (all accounts) |
+|---|---|---|---|
+| Azure CLI (`az login`) | yes | yes | yes |
+| Account key (key1/key2) | yes | yes | no: enter `az://ACCOUNT` |
+| Connection string with `AccountKey=` | yes | yes | yes, the account it names |
+| SAS with resource types *Service* + *Container* | yes | yes | no: enter `az://ACCOUNT` |
+| SAS with resource type *Container* only | yes | no (`AuthorizationResourceTypeMismatch`) | no |
+| Connection string with `SharedAccessSignature=` | as for its SAS | as for its SAS | as for its SAS, on the account in its `BlobEndpoint` |
+
+A key or SAS belongs to one storage account, so only the Azure CLI can find accounts for `az://`. A SAS can be pasted into either the **SAS token** or the **Account key** field (or set as `AZURE_STORAGE_SAS_TOKEN` or `AZURE_STORAGE_CONNECTION_STRING`); CloudDirStat recognizes it either way. For a SAS, choose the Blob service, the resource types above, and Read + List permissions; nothing more is needed.
+
+**Azure: `the account key is not valid`**
+
+The Account key field (or `AZURE_STORAGE_KEY` / `AZURE_STORAGE_CONNECTION_STRING`) must hold key1 or key2 from the storage account's **Access keys** page, a connection string from the same page, or a SAS. Check that nothing was cut off when copying.
+
+**Azure: `AuthenticationFailed` / `Azure rejected the credentials`**
+
+The key or SAS is for a different storage account than the one in the location, has expired, or was revoked (rotating an account key revokes every SAS signed with it). Check the account name in the location, and the SAS's start and expiry times.
+
 **Azure: `AuthorizationPermissionMismatch` while listing**
 
 Your account can manage the storage account but not read its data. Assign yourself the **Storage Blob Data Reader** role on the account (or container); role assignments can take a few minutes to apply.

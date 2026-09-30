@@ -8,6 +8,7 @@ use clouddirstat_providers::{Location, Provider, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
+use crate::cloud_picker::{self, Scheme};
 use crate::credentials_form::CredentialsForm;
 use crate::error_view;
 use crate::estimate_view::{self, EstimateTask};
@@ -215,11 +216,7 @@ impl App {
     /// The provider of the location being typed, going by its scheme, so the sign-in
     /// fields match it even before the location is complete.
     fn provider(&self) -> Provider {
-        match self.location_input.trim().split_once("://") {
-            Some(("gs", _)) => Provider::Gcs,
-            Some(("az", _)) => Provider::Azure,
-            _ => Provider::S3,
-        }
+        cloud_picker::provider_of(&self.location_input).unwrap_or(Provider::S3)
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -230,11 +227,26 @@ impl App {
         // Wraps onto a second line in a narrow window instead of running off the edge.
         ui.horizontal_wrapped(|ui| {
             ui.label("Location");
+            let picked = cloud_picker::show(ui, &mut self.location_input);
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location_input)
-                    .hint_text("s3://bucket/  gs://bucket/  az://account/container/")
+                    .id(egui::Id::new(LOCATION_FIELD))
+                    .hint_text("bucket/folder/  or  account/container/folder/")
                     .desired_width(320.0),
             );
+            if picked {
+                focus_at_end(ui.ctx(), &self.location_input);
+            }
+            if let Some(error) = location_error(&self.location_input, location.has_focus()) {
+                let stroke = egui::Stroke::new(1.5, ui.visuals().error_fg_color);
+                ui.painter().rect_stroke(
+                    location.rect.expand(1.0),
+                    2.0,
+                    stroke,
+                    egui::StrokeKind::Outside,
+                );
+                location.clone().on_hover_text(error);
+            }
             submitted |=
                 location.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.separator();
@@ -637,6 +649,44 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
         .inner
 }
 
+/// The Location field's id, so choosing a cloud can put the cursor back in it.
+const LOCATION_FIELD: &str = "location";
+
+/// What is wrong with the location being typed, for the field's error outline. An
+/// unknown scheme shows at once; other mistakes (e.g. a bucket name still being typed)
+/// only once the field loses focus.
+fn location_error(input: &str, typing: bool) -> Option<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    if cloud_picker::scheme_of(input) == Scheme::Unknown {
+        return Some(
+            "Unknown scheme: locations start with s3://, gs://, or az:// (or choose S3, \
+             Google, or Azure on the left)"
+                .to_owned(),
+        );
+    }
+    if typing {
+        return None;
+    }
+    input
+        .parse::<Location>()
+        .err()
+        .map(|error| error.to_string())
+}
+
+/// Focuses the Location field with the cursor after `text`, ready to type the rest.
+fn focus_at_end(ctx: &egui::Context, text: &str) {
+    use egui::text::{CCursor, CCursorRange};
+    let id = egui::Id::new(LOCATION_FIELD);
+    let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+    let end = CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(CCursorRange::one(end)));
+    state.store(ctx, id);
+    ctx.memory_mut(|memory| memory.request_focus(id));
+}
+
 /// A label cut off with "…" to fit the space left; hovering shows all of it.
 fn fitted(ui: &mut egui::Ui, text: String) {
     ui.add(egui::Label::new(text).truncate());
@@ -663,4 +713,25 @@ fn warnings(ui: &mut egui::Ui, stats: &ScanStats) {
     };
     ui.colored_label(ui.visuals().warn_fg_color, summary)
         .on_hover_text(details.join("\n"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_schemes_are_flagged_while_typing() {
+        assert!(location_error("ftp://host/x", true).is_some());
+        assert!(location_error("s4://bucket", false).is_some());
+    }
+
+    #[test]
+    fn other_mistakes_wait_until_the_field_is_left() {
+        // "s3://my" is a bucket name still being typed.
+        assert_eq!(location_error("s3://my", true), None);
+        assert!(location_error("s3://my", false).is_some());
+        assert_eq!(location_error("", false), None);
+        assert_eq!(location_error("gs://my-bucket/logs/", false), None);
+        assert_eq!(location_error("my-bucket/logs/", false), None);
+    }
 }

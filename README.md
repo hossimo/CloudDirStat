@@ -51,7 +51,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
    | Google Cloud | `gcloud auth application-default login` |
    | Azure | `az login` |
 
-3. **Scan.** Start `clouddirstat-gui`, type a location such as `s3://my-bucket`, and press **Scan**. Or from a terminal:
+3. **Scan.** Start `clouddirstat-gui`, choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
 
    ```sh
    clouddirstat scan s3://my-bucket
@@ -76,11 +76,11 @@ A location says what to scan. Everything after the bucket (or container) is an o
 | `az://mystorageaccount` | Every container of a storage account |
 | `az://` | Every storage account you can see (Azure CLI sign-in only) |
 
-A location without `s3://`, `gs://`, or `az://` is taken as S3. When scanning several buckets, each one appears as a top-level folder and is priced at its own region's rates; buckets you can't list are skipped with a warning.
+In the app you don't need to type the `s3://`, `gs://`, or `az://` part: the **S3**, **Google**, and **Azure** buttons next to **Location** put it in for you, and switching between them keeps the rest of the location. Typing or pasting a full location selects the matching button, and an unknown scheme outlines the field in red. A location without a scheme is taken as S3. When scanning several buckets, each one appears as a top-level folder and is priced at its own region's rates; buckets you can't list are skipped with a warning.
 
 ## Connect to your cloud
 
-In the app, the sign-in choices next to **Location** change with the location you type: **Profile / Access key** for `s3://`, **Google login / Access token** for `gs://`, and **Azure CLI / SAS token / Account key** for `az://`. The **Help** button repeats the essentials.
+In the app, the sign-in choices to the right of **Location** change with the cloud you choose: **Profile / Access key** for `s3://`, **Google login / Access token** for `gs://`, and **Azure CLI / SAS token / Account key** for `az://`. The **Help** button repeats the essentials.
 
 Signing in with your cloud's own login is recommended: nothing secret is typed into CloudDirStat, and sessions expire on their own. Keys and tokens work too, for when you can't use a login.
 

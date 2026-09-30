@@ -40,7 +40,9 @@ struct Cli {
     #[arg(long)]
     profile: Option<String>,
 
-    /// Include noncurrent versions and delete markers (requires s3:ListBucketVersions)
+    /// Include old versions: noncurrent versions and delete markers in S3 (requires
+    /// s3:ListBucketVersions), noncurrent and soft-deleted objects in Cloud Storage,
+    /// and previous versions, snapshots, and soft-deleted blobs in Azure
     #[arg(long)]
     versions: bool,
 }

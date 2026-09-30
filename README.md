@@ -4,18 +4,18 @@
 
 [![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
 
-WinDirStat for cloud object storage. Find out what is using the space (and the money) in your buckets.
+WinDirStat for cloud object storage (Amazon S3, Google Cloud Storage, and Azure Blob Storage). Find out what is using the space (and the money) in your buckets.
 
 CloudDirStat lists a bucket (or all of them), rebuilds a folder tree from the object keys, and shows where the bytes and the money are: by folder, storage class, file type, and version state, in a sortable folder list and a treemap.
 
-- **Least privilege:** only needs `s3:ListBucket`. Optional permissions add features and are skipped with a warning when missing. It never reads or writes object contents.
-- **Cost-aware:** estimates the monthly storage cost of every folder and object from each bucket region's list prices, and reports what the scan itself cost in LIST requests.
+- **Least privilege:** only needs permission to list (`s3:ListBucket`, `storage.objects.list`, or Storage Blob Data Reader). Optional permissions add features and are skipped with a warning when missing. It never reads or writes object contents.
+- **Cost-aware:** estimates the monthly storage cost of every folder and object from each bucket's region (and, on Azure, redundancy) list prices, and reports what the scan itself cost in LIST requests.
 - **Finds hidden costs:** noncurrent versions, deleted objects whose old versions are still billed, and incomplete multipart uploads that normal listings don't show.
-- **All buckets at once:** scan `s3://` to see every bucket in one tree.
+- **All buckets at once:** scan `s3://`, `gs://`, or `az://` to see every bucket (or container) in one tree.
 - **Native and small:** single binaries for Windows, macOS, and Linux, x64 and ARM64 (CLI ~9 MB, GUI ~14 MB). No runtime, no browser.
 - **Fast and lean:** lists prefixes and buckets in parallel; about 66 bytes of memory per object (roughly 650 MB for 10 million).
 
-> **Status:** early development, but usable: the CLI and GUI both work for AWS S3, and [prebuilt releases](#download) are available. Azure Blob Storage and Google Cloud Storage come later (see [Roadmap](#roadmap)).
+> **Status:** early development, but usable: the CLI and GUI work for Amazon S3, Azure Blob Storage, and Google Cloud Storage, and [prebuilt releases](#download) are available. Google Cloud Storage support is new and has not yet been tested against a real bucket; reports are welcome.
 
 ![CloudDirStat scanning six demo buckets: folder list, file types legend, and treemap colored by file type](screenshots/demo-1.png)
 
@@ -29,13 +29,21 @@ clouddirstat scan s3://my-bucket/logs/ --profile prod --depth 3
 clouddirstat scan s3://my-bucket --versions
 clouddirstat scan s3://                      # every bucket, each as a top-level folder
 clouddirstat estimate s3://                  # sizes, costs, and scan cost from CloudWatch, without listing
+clouddirstat scan gs://my-bucket/photos/     # Google Cloud Storage
+clouddirstat scan gs:// --project my-project # every bucket of a project
+clouddirstat scan az://myaccount/mycontainer # Azure Blob Storage
+clouddirstat scan az://myaccount             # every container of a storage account
+clouddirstat scan az://                      # every account you can see (Azure CLI sign-in)
 ```
+
+A location without a scheme (`my-bucket/logs/`) is taken as S3.
 
 | Option | Default | Description |
 |---|---|---|
 | `--profile <NAME>` | default chain | AWS profile from `~/.aws/config` / `~/.aws/credentials` |
-| `--region <REGION>` | auto | Bucket region. Detected automatically when omitted |
-| `--versions` | off | Include noncurrent versions and delete markers (needs `s3:ListBucketVersions`) |
+| `--region <REGION>` | auto | S3 bucket region. Detected automatically when omitted |
+| `--project <ID>` | gcloud's project | Google Cloud project whose buckets `gs://` lists |
+| `--versions` | off | Include old versions: noncurrent versions and delete markers in S3 (needs `s3:ListBucketVersions`), noncurrent and soft-deleted objects in Cloud Storage, previous versions, snapshots, and soft-deleted blobs in Azure |
 | `--depth <N>` | 2 | Directory levels to print |
 | `--top <N>` | 10 | Entries per directory and in the largest-objects list (per bucket for `s3://`) |
 | `--concurrency <N>` | 32 | Maximum parallel LIST requests |
@@ -75,19 +83,21 @@ clouddirstat-gui
 clouddirstat-gui s3://my-bucket --profile prod
 ```
 
-Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. Use `s3://` as the location to scan every bucket at once (needs `s3:ListAllMyBuckets`); each bucket appears as a top-level folder, priced at its own region's rates, and buckets you can't list are skipped with a warning.
+Enter a location (and optionally a profile) and press **Scan**, or pass them on the command line to scan on startup. The sign-in fields next to the location change with its scheme (`s3://`, `gs://`, `az://`); see [Credentials](#credentials). Use `s3://` as the location to scan every bucket at once (needs `s3:ListAllMyBuckets`), or `gs://` / `az://ACCOUNT` / `az://` for Google Cloud and Azure; each bucket appears as a top-level folder, priced at its own region's rates, and buckets you can't list are skipped with a warning.
 
-- **Folder list:** every prefix and object, sorted by size, with its share of the parent folder and when it was last modified (for a folder, the newest object in it; for an incomplete upload, when it was started; dates are UTC). It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
+- **Folder list:** every prefix and object, sorted by size, with its share of the parent folder and when it was last modified (for a folder, the newest object in it; for an incomplete upload, when it was started; dates are UTC). It fills in while the scan runs. Click the arrow or double-click a folder to expand it. A folder shows its largest 1,000 items, then a **… N more** row with the size of the rest; click it to show 1,000 more.
 - **Largest files:** the tab next to **Folders** lists the largest files (50 by default; change the number at the top), with size, cost, storage class, last modified date, and folder. When scanning all buckets it lists the largest files in each bucket, under headings you can collapse one by one or all at once. Click a file to select it; double-click to show it in the folder list.
 - **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list. Double-click to zoom one folder level toward the pointer, right-click (or the mouse back button) to zoom out, or right-click a folder in the list and choose **Zoom treemap here**. The path above the treemap shows where you are; click any part of it to jump back.
 - **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions and deleted objects whose old versions are still billed, which need **Versions** checked, plus incomplete uploads, which are always found), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
 - **Filter:** click a row in the legend (a storage class, object state such as *Incomplete upload*, prefix, or file type) to show only those objects in the folder list, largest files, and treemap, with sizes and costs recalculated. A bar above the lists shows the active filter and its total; click the row again, press **Clear filter**, or press Esc to show everything.
 - **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details). While a whole bucket (or `s3://`) is being scanned, a progress bar compares the objects listed so far with CloudWatch's count.
 - **Stop** ends the scan and keeps the partial result.
-- **Estimate** shows the size, object count, storage classes, monthly cost, and the cost of a full scan from CloudWatch, in seconds and without listing anything; for `s3://`, per bucket (click one to put it in Location). See [Estimates from CloudWatch](#estimates-from-cloudwatch).
-- **Help** explains the permissions a scan needs and shows a minimal IAM policy for the bucket in the Location field, ready to copy.
+- **Estimate** (S3 only) shows the size, object count, storage classes, monthly cost, and the cost of a full scan from CloudWatch, in seconds and without listing anything; for `s3://`, per bucket (click one to put it in Location). See [Estimates from CloudWatch](#estimates-from-cloudwatch).
+- **Help** explains the permissions a scan needs and how to sign in to each provider, and shows a minimal IAM policy for the bucket in the Location field, ready to copy.
 
 ### Credentials
+
+#### Amazon S3
 
 CloudDirStat uses the standard AWS credential chain, the same as the AWS CLI: environment variables, `~/.aws/credentials`, `~/.aws/config` profiles, and EC2/ECS/EKS roles. Pick a profile with `--profile` (CLI) or the **Profile** field (GUI).
 
@@ -109,6 +119,35 @@ clouddirstat scan s3://my-bucket
 
 If you do create an access key, give it only the permissions below.
 
+#### Google Cloud Storage
+
+Sign in once with Application Default Credentials:
+
+```sh
+gcloud auth application-default login
+clouddirstat scan gs://my-bucket
+```
+
+A service account key file works too: set `GOOGLE_APPLICATION_CREDENTIALS` to its path. (Workload identity federation and impersonated credentials are not supported yet.) To use an access token instead, choose **Access token** in the GUI and paste the output of `gcloud auth print-access-token`, or set `GOOGLE_OAUTH_ACCESS_TOKEN` for the CLI. Tokens last about an hour and are kept in memory only.
+
+`gs://` lists every bucket of a project: the one in `--project` (or the GUI's **Project** field), else `GOOGLE_CLOUD_PROJECT` or `CLOUDSDK_CORE_PROJECT`, the credentials file's project, or gcloud's (`gcloud config set project PROJECT_ID`).
+
+#### Azure Blob Storage
+
+| Method | GUI | CLI |
+|---|---|---|
+| Azure CLI (`az login`), recommended | **Azure CLI** | the default |
+| Shared access signature (SAS) | **SAS token** | `AZURE_STORAGE_SAS_TOKEN` |
+| Account key or connection string | **Account key** | `AZURE_STORAGE_KEY` or `AZURE_STORAGE_CONNECTION_STRING` |
+
+With the Azure CLI, CloudDirStat asks `az` for tokens as it goes. Listing blobs needs the **Storage Blob Data Reader** role on the account or container; being the subscription's Owner or Contributor is not enough. A SAS or key covers one account, so enter `az://ACCOUNT/...`; a connection string names its account, so `az://` then scans that account. An account key grants full access to the account, so prefer the Azure CLI or a read-only SAS (list permission) where you can.
+
+The account's region and redundancy, used for prices, come from Azure Resource Manager through the Azure CLI (the **Reader** role), even when blobs are listed with a SAS or key. Without them, costs are estimated at eastus LRS prices, with a warning.
+
+#### `.env` files
+
+Both apps read a `.env` file in the current directory at startup, so variables such as `AZURE_STORAGE_CONNECTION_STRING` don't have to be exported in every shell. The GUI fills in its Azure fields from them. Keep `.env` out of version control (this repository's `.gitignore` does).
+
 ### Estimates from CloudWatch
 
 S3 publishes each bucket's size (per storage class) and object count to CloudWatch once a day, for free. `clouddirstat estimate` and the GUI's **Estimate** button read them, so you can see how big a bucket is, what it costs per month, and what a full scan would cost before running one:
@@ -121,11 +160,12 @@ A full scan needs about 4,225 LIST requests (~$0.0211); this estimate cost ~$0.0
 
 - Needs `cloudwatch:GetMetricData` (optional; without it, Estimate shows an error and scans show no progress bar). It costs $0.01 per 1,000 metrics: 26 per bucket for an estimate (about $0.0003), 1 per bucket for scan progress.
 - The figures are a day or two old and cover whole buckets, not prefixes. Object counts include every version, delete marker, and upload part, so a scan without versions may list fewer objects.
-- Costs use the same list prices as scans, but CloudWatch reports Intelligent-Tiering bytes per tier without object counts, so the monitoring fee is left out.
+- Costs use the same list prices as scans. CloudWatch reports Intelligent-Tiering bytes per access tier, so each tier is priced at its own rate (scans can't tell the tiers apart and use the Frequent Access rate), but without object counts, so the monitoring fee is left out.
+- Estimates are only available for S3 so far.
 
 ### Cost of a scan
 
-S3 charges for LIST requests (about $0.005 per 1,000 in most regions). Each request returns up to 1,000 objects, so scanning 10 million objects costs roughly $0.05.
+S3 charges for LIST requests (about $0.005 per 1,000 in most regions). Each request returns up to 1,000 objects, so scanning 10 million objects costs roughly $0.05. Google Cloud Storage bills listing as a Class A operation (by the bucket's default storage class), and Azure bills List operations per 10,000 by region and redundancy; each request returns up to 1,000 objects (Google) or 5,000 blobs (Azure). The scan reports what it cost at those list prices.
 
 ### Incomplete multipart uploads
 
@@ -147,7 +187,11 @@ Prices are compiled into the binary from the public AWS Price List ([S3 pricing]
 python scripts/update_s3_prices.py
 ```
 
+Google Cloud Storage and Azure scans work the same way, with prices by bucket location (Google) or by account region and redundancy (Azure), generated by `scripts/update_gcs_prices.py` and `scripts/update_azure_prices.py`. They leave out operations, retrieval, network, and minimum storage duration (early deletion) charges.
+
 ## Permissions
+
+### Amazon S3
 
 The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 
@@ -161,6 +205,25 @@ The minimum IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json).
 | `cloudwatch:GetMetricData` | optional | Estimates and scan progress from S3's daily storage metrics |
 
 CloudDirStat never calls `GetObject`, `PutObject`, or `DeleteObject`.
+
+### Google Cloud Storage
+
+| Permission | Required | Used for |
+|---|---|---|
+| `storage.objects.list` | yes | Listing objects (in the Storage Object Viewer role) |
+| `storage.buckets.get` | optional | The bucket's location, for prices (otherwise us-central1 prices) |
+| `storage.buckets.list` | only for `gs://` | Finding every bucket of the project |
+
+Sign-in asks only for the `devstorage.read_only` scope. With `--versions`, soft-deleted objects are listed too; if that fails, the scan continues without them and warns.
+
+### Azure Blob Storage
+
+| Role | Required | Used for |
+|---|---|---|
+| Storage Blob Data Reader | yes (with the Azure CLI) | Listing containers and blobs |
+| Reader | optional; needed for `az://` | Finding storage accounts, and their region and redundancy for prices |
+
+A SAS needs list permission (and, for `az://ACCOUNT`, service-level list access to find the containers). Accounts with a hierarchical namespace (Data Lake Storage) can't list versions; `--versions` then continues without them and warns.
 
 ## Download
 
@@ -206,7 +269,7 @@ cargo fmt --all
 | Crate | Purpose |
 |---|---|
 | `crates/core` | Provider-agnostic folder tree, size aggregation, formatting. No I/O. |
-| `crates/providers` | Cloud scanners. Currently S3. |
+| `crates/providers` | Cloud scanners: S3 (with CloudWatch estimates), Google Cloud Storage, and Azure Blob Storage, plus their price tables. |
 | `crates/cli` | The `clouddirstat` command-line tool. |
 | `crates/gui` | The `clouddirstat-gui` treemap app (egui). |
 
@@ -250,6 +313,14 @@ Indentation is only valid for nested settings, for example under `s3 =`.
 
 Sessions from `aws login` and `aws sso login` expire. Run the login command again for that profile, then rescan.
 
+**Azure: `AuthorizationPermissionMismatch` while listing**
+
+Your account can manage the storage account but not read its data. Assign yourself the **Storage Blob Data Reader** role on the account (or container); role assignments can take a few minutes to apply.
+
+**Google: `Google rejected the credentials`**
+
+The saved sign-in has expired or been revoked. Run `gcloud auth application-default login` again, or paste a fresh access token.
+
 ## Roadmap
 
 Done:
@@ -265,6 +336,8 @@ Done:
 - [x] Click to zoom into a folder in the treemap
 - [x] Instant bucket totals and scan-cost estimate from CloudWatch
 - [x] Credentials: profiles, `aws login`, IAM Identity Center, access keys
+- [x] Azure Blob Storage (`az://`): Azure CLI, SAS, account keys and connection strings
+- [x] Google Cloud Storage (`gs://`): Application Default Credentials, service accounts, access tokens
 - [x] Low memory for large buckets (~66 bytes per object)
 - [x] Release builds for Windows, macOS, and Linux (x64 and ARM64)
 
@@ -272,8 +345,8 @@ Next:
 
 - [ ] macOS app bundle and code signing
 - [ ] Read S3 Inventory reports for billion-object buckets
-- [ ] Azure Blob Storage
-- [ ] Google Cloud Storage
+- [ ] Test Google Cloud Storage against real buckets
+- [ ] Estimates without listing for Google Cloud Storage and Azure
 
 ## AI Disclosure
 

@@ -128,6 +128,31 @@ impl<'a> Filtered<'a> {
         children.into_iter().map(|(child, _)| child).collect()
     }
 
+    /// The `limit` largest children of `id`, largest first, plus how many others there
+    /// are and what they add up to. Unlike [`Filtered::children_by_size`] it never sorts
+    /// every child, which matters for a folder with millions of objects.
+    pub fn largest_children(&self, id: NodeId, limit: usize) -> (Vec<NodeId>, usize, Usage) {
+        let mut children: Vec<(NodeId, Usage)> = self
+            .tree
+            .children(id)
+            .map(|child| (child, self.usage(child)))
+            .filter(|(_, usage)| self.subset.is_none() || usage.objects > 0)
+            .collect();
+        let mut rest = Usage::default();
+        let mut hidden = 0;
+        if children.len() > limit {
+            children.select_nth_unstable_by_key(limit, |&(_, usage)| Reverse(usage.bytes));
+            for &(_, usage) in &children[limit..] {
+                rest += usage;
+            }
+            hidden = children.len() - limit;
+            children.truncate(limit);
+        }
+        children.sort_by_key(|&(_, usage)| Reverse(usage.bytes));
+        let largest = children.into_iter().map(|(child, _)| child).collect();
+        (largest, hidden, rest)
+    }
+
     /// The `count` largest objects under `root` that pass the filter, largest first.
     pub fn largest_objects_in(&self, root: NodeId, count: usize) -> Vec<NodeId> {
         match self.subset {
@@ -210,6 +235,29 @@ mod tests {
 
         assert_eq!(view.usage(Tree::ROOT), tree.total());
         assert_eq!(names(view, Tree::ROOT), ["b", "a"]);
+    }
+
+    #[test]
+    fn largest_children_sums_up_the_rest() {
+        let tree = tree_of(&[
+            ("a", 5, "STANDARD"),
+            ("b", 50, "STANDARD"),
+            ("c", 20, "GLACIER"),
+            ("d", 1, "STANDARD"),
+        ]);
+        let view = Filtered::from(&tree);
+        let (largest, hidden, rest) = view.largest_children(Tree::ROOT, 2);
+        let names: Vec<_> = largest.iter().map(|&id| tree.name(id)).collect();
+        assert_eq!(names, ["b", "c"]);
+        assert_eq!((hidden, rest), (2, Usage::new(6, 2)));
+
+        let (all, hidden, _) = view.largest_children(Tree::ROOT, 10);
+        assert_eq!((all, hidden), (view.children_by_size(Tree::ROOT), 0));
+
+        let subset = Subset::new(&tree, |id| tree.storage_class(id) == Some("STANDARD"));
+        let filtered = Filtered::new(&tree, Some(&subset));
+        let (_, hidden, rest) = filtered.largest_children(Tree::ROOT, 1);
+        assert_eq!((hidden, rest), (2, Usage::new(6, 2)));
     }
 
     #[test]

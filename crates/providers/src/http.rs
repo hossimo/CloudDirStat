@@ -75,9 +75,10 @@ impl Http {
             for &(name, value) in headers {
                 request = request.header(name, value);
             }
-            let request = request
-                .body(Full::new(body.clone()))
-                .map_err(|error| Error::Network(format!("invalid request to {url}: {error}")))?;
+            // Only the host: the query string may hold a SAS token.
+            let request = request.body(Full::new(body.clone())).map_err(|error| {
+                Error::Network(format!("invalid request to {}: {error}", host(url)))
+            })?;
 
             let result = tokio::time::timeout(TIMEOUT, self.round_trip(request)).await;
             let retry = match &result {
@@ -148,6 +149,20 @@ mod tests {
     fn host_leaves_out_path_and_query() {
         assert_eq!(host("https://example.com/b/x?token=secret"), "example.com");
         assert_eq!(host("https://example.com?sig=1"), "example.com");
+    }
+
+    #[test]
+    fn invalid_urls_are_reported_without_their_query() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let http = Http::new().unwrap();
+        let url = "https://acct.blob.core.windows.net/c?comp=list&sig=sec ret";
+        let error = runtime.block_on(http.get(url, &[])).err().unwrap();
+        let message = error.to_string();
+        assert!(message.contains("acct.blob.core.windows.net"), "{message}");
+        assert!(!message.contains("sec"), "{message}");
     }
 
     #[test]

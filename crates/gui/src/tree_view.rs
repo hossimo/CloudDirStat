@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use clouddirstat_core::{
-    Date, Filtered, NodeId, NodeKind, Tree, format_bytes, format_count, format_usd,
+    Date, Filtered, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_usd,
 };
 use eframe::egui::{self, Align, Color32, Label, Sense};
 use egui_extras::{Column, TableBuilder};
@@ -15,12 +15,17 @@ const MIN_NAME_WIDTH: f32 = 150.0;
 const NUMBER_COLUMNS: [f32; 5] = [110.0, 70.0, 90.0, 100.0, 90.0];
 /// Last modified is last and fills the leftover width, but starts about this wide.
 const LAST_MODIFIED_WIDTH: f32 = 100.0;
+/// Items listed per folder before a "more" row; each click on it shows this many more.
+/// Keeps a folder with millions of objects from becoming millions of rows.
+const ROWS_PER_FOLDER: usize = 1000;
 
 /// The folder list: one row per visible node, children sorted largest first.
 #[derive(Default)]
 pub struct TreeView {
     root: Option<NodeId>,
     expanded: HashSet<NodeId>,
+    /// Items shown in folders where the user asked for more than [`ROWS_PER_FOLDER`].
+    shown: HashMap<NodeId, usize>,
     rows: Vec<Row>,
     stale: bool,
     scroll_to: Option<NodeId>,
@@ -28,8 +33,12 @@ pub struct TreeView {
 
 #[derive(Clone, Copy)]
 struct Row {
+    /// The node, or for a "more" row the folder whose items it stands for.
     id: NodeId,
     depth: u16,
+    /// Set on the row after a folder's first items: how many more there are, and what
+    /// they add up to.
+    more: Option<(usize, Usage)>,
 }
 
 impl TreeView {
@@ -67,10 +76,11 @@ impl TreeView {
             self.rebuild_rows(view, root);
         }
 
-        let scroll_row = self
-            .scroll_to
-            .take()
-            .and_then(|target| self.rows.iter().position(|row| row.id == target));
+        let scroll_row = self.scroll_to.take().and_then(|target| {
+            self.rows
+                .iter()
+                .position(|row| row.id == target && row.more.is_none())
+        });
 
         // Name starts with whatever the number columns leave over; after that every
         // column keeps the width the user gives it, and the last column absorbs the
@@ -98,6 +108,7 @@ impl TreeView {
         }
 
         let mut toggled = None;
+        let mut show_more = None;
         let mut zoom = None;
         table
             .header(ROW_HEIGHT, |mut header| {
@@ -118,6 +129,13 @@ impl TreeView {
             .body(|body| {
                 body.rows(ROW_HEIGHT, self.rows.len(), |mut table_row| {
                     let row = self.rows[table_row.index()];
+                    if let Some((hidden, usage)) = row.more {
+                        let parent_bytes = view.usage(row.id).bytes;
+                        if more_row(&mut table_row, row.depth, hidden, usage, parent_bytes) {
+                            show_more = Some(row.id);
+                        }
+                        return;
+                    }
                     let node = tree.node(row.id);
                     let usage = view.usage(row.id);
                     table_row.set_selected(*selected == Some(row.id));
@@ -174,6 +192,10 @@ impl TreeView {
             }
             self.stale = true;
         }
+        if let Some(folder) = show_more {
+            *self.shown.entry(folder).or_insert(ROWS_PER_FOLDER) += ROWS_PER_FOLDER;
+            self.stale = true;
+        }
         zoom
     }
 
@@ -196,19 +218,68 @@ impl TreeView {
 
     fn rebuild_rows(&mut self, view: Filtered, root: NodeId) {
         self.rows.clear();
-        let mut pending = vec![Row { id: root, depth: 0 }];
+        let mut pending = vec![Row {
+            id: root,
+            depth: 0,
+            more: None,
+        }];
         while let Some(row) = pending.pop() {
             self.rows.push(row);
-            if self.expanded.contains(&row.id) {
-                let children = view.children_by_size(row.id);
-                pending.extend(children.into_iter().rev().map(|id| Row {
-                    id,
-                    depth: row.depth.saturating_add(1),
-                }));
+            if row.more.is_some() || !self.expanded.contains(&row.id) {
+                continue;
             }
+            let depth = row.depth.saturating_add(1);
+            let limit = self.shown.get(&row.id).copied().unwrap_or(ROWS_PER_FOLDER);
+            let (children, hidden, rest) = view.largest_children(row.id, limit);
+            if hidden > 0 {
+                pending.push(Row {
+                    id: row.id,
+                    depth,
+                    more: Some((hidden, rest)),
+                });
+            }
+            pending.extend(children.into_iter().rev().map(|id| Row {
+                id,
+                depth,
+                more: None,
+            }));
         }
         self.stale = false;
     }
+}
+
+/// The row after a folder's first items. Returns whether it was clicked.
+fn more_row(
+    table_row: &mut egui_extras::TableRow<'_, '_>,
+    depth: u16,
+    hidden: usize,
+    usage: Usage,
+    parent_bytes: u64,
+) -> bool {
+    let fraction = fraction(usage.bytes, parent_bytes);
+    table_row.col(|ui| {
+        ui.add_space(f32::from(depth) * INDENT + INDENT + ui.spacing().item_spacing.x);
+        let shown = hidden.min(ROWS_PER_FOLDER);
+        ui.add(
+            Label::new(
+                egui::RichText::new(format!(
+                    "… {} more (click to show {})",
+                    format_count(hidden as u64),
+                    format_count(shown as u64)
+                ))
+                .italics(),
+            )
+            .selectable(false)
+            .truncate(),
+        );
+    });
+    table_row.col(|ui| proportion_bar(ui, fraction));
+    table_row.col(|ui| right_aligned(ui, format!("{:.1}%", fraction * 100.0)));
+    table_row.col(|ui| right_aligned(ui, format_bytes(usage.bytes)));
+    table_row.col(|ui| right_aligned(ui, format_usd(usage.monthly_cost)));
+    table_row.col(|ui| right_aligned(ui, format_count(usage.objects)));
+    table_row.col(|_| {});
+    table_row.response().clicked()
 }
 
 fn node_icon(ui: &mut egui::Ui, tree: &Tree, id: NodeId, colors: &Colors) {

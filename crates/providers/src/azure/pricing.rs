@@ -146,8 +146,8 @@ impl Pricing for AzurePricing {
 
     fn notes(&self) -> String {
         format!(
-            "Estimated storage cost from Azure Blob Storage list prices ({}, {PUBLISHED}).
-             First volume tier. Excludes operations, retrieval, data transfer, and early
+            "Estimated storage cost from Azure Blob Storage list prices ({}, {PUBLISHED}).\n\
+             First volume tier. Excludes operations, retrieval, data transfer, and early \
              deletion charges (30, 90, and 180 days for Cool, Cold, and Archive).",
             self.default_label
         )

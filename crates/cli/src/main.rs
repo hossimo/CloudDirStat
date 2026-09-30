@@ -73,7 +73,9 @@ impl TargetArgs {
                 profile: self.profile.clone(),
             },
             gcs: GcsCredentials {
-                access_token: std::env::var("GOOGLE_OAUTH_ACCESS_TOKEN").ok(),
+                access_token: std::env::var("GOOGLE_OAUTH_ACCESS_TOKEN")
+                    .ok()
+                    .filter(|token| !token.trim().is_empty()),
                 project: self.project.clone(),
             },
             azure: AzureCredentials::from_env(),
@@ -87,7 +89,9 @@ struct ScanArgs {
     #[command(flatten)]
     target: TargetArgs,
 
-    /// Include noncurrent versions and delete markers (requires s3:ListBucketVersions)
+    /// Include old versions: noncurrent versions and delete markers in S3 (requires
+    /// s3:ListBucketVersions), noncurrent and soft-deleted objects in Cloud Storage,
+    /// and previous versions, snapshots, and soft-deleted blobs in Azure
     #[arg(long)]
     versions: bool,
 

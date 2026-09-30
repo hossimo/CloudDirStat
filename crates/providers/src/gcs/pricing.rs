@@ -157,8 +157,8 @@ impl Pricing for GcsPricing {
 
     fn notes(&self) -> String {
         format!(
-            "Estimated storage cost from Cloud Storage list prices ({}, {PUBLISHED}).
-             Excludes operations, retrieval, network, and minimum storage duration
+            "Estimated storage cost from Cloud Storage list prices ({}, {PUBLISHED}).\n\
+             Excludes operations, retrieval, network, and minimum storage duration \
              charges (30, 90, and 365 days for Nearline, Coldline, and Archive).",
             self.default_label
         )

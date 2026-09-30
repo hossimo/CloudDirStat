@@ -17,7 +17,7 @@ const ROW_HEIGHT: f32 = 20.0;
 /// What the user did in the window.
 pub enum Action {
     /// Scan the estimated location.
-    Scan(ScanRequest),
+    Scan(Box<ScanRequest>),
     /// Put this bucket in the Location field.
     Choose(String),
 }
@@ -189,7 +189,7 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
     );
     ui.add_space(4.0);
     if ui.button(format!("Scan {}", request.location)).clicked() {
-        action = Some(Action::Scan(request.clone()));
+        action = Some(Action::Scan(Box::new(request.clone())));
     }
     action
 }

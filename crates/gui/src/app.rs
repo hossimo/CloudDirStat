@@ -198,7 +198,7 @@ impl App {
                 self.estimate = None;
                 if !self.is_scanning() {
                     self.location_input = request.location.to_string();
-                    self.start_scan(request, ctx);
+                    self.start_scan(*request, ctx);
                 }
             }
             Some(estimate_view::Action::Choose(bucket)) => {

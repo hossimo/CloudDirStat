@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    EntryKind, Filtered, NodeId, Subset, Tree, format_bytes, format_count, format_usd,
+    EntryKind, Filtered, NodeId, Subset, Tree, format_bytes, format_count, format_counted,
+    format_usd,
 };
-use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
+use clouddirstat_providers::{Location, Provider, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
@@ -149,14 +150,14 @@ impl App {
     /// The location, credentials, and options in the toolbar, or `None` (with the
     /// problem shown in the status bar) when they are not valid.
     fn request_from_inputs(&mut self) -> Option<ScanRequest> {
-        let location = match self.location_input.trim().parse::<S3Location>() {
+        let location = match self.location_input.trim().parse::<Location>() {
             Ok(location) => location,
             Err(error) => {
                 self.input_error = Some(error.to_string());
                 return None;
             }
         };
-        let credentials = match self.credentials.source() {
+        let credentials = match self.credentials.credentials(location.provider()) {
             Ok(credentials) => credentials,
             Err(error) => {
                 self.input_error = Some(error);
@@ -197,7 +198,7 @@ impl App {
                 self.estimate = None;
                 if !self.is_scanning() {
                     self.location_input = request.location.to_string();
-                    self.start_scan(request, ctx);
+                    self.start_scan(*request, ctx);
                 }
             }
             Some(estimate_view::Action::Choose(bucket)) => {
@@ -211,7 +212,18 @@ impl App {
         self.scan.as_ref().is_some_and(Scan::is_running)
     }
 
+    /// The provider of the location being typed, going by its scheme, so the sign-in
+    /// fields match it even before the location is complete.
+    fn provider(&self) -> Provider {
+        match self.location_input.trim().split_once("://") {
+            Some(("gs", _)) => Provider::Gcs,
+            Some(("az", _)) => Provider::Azure,
+            _ => Provider::S3,
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        let provider = self.provider();
         let mut submitted = false;
         let mut scan_clicked = false;
         let mut estimate_clicked = false;
@@ -219,16 +231,16 @@ impl App {
             ui.label("Location");
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location_input)
-                    .hint_text("s3://bucket/prefix/  or  s3:// for all buckets")
+                    .hint_text("s3://bucket/  gs://bucket/  az://account/container/")
                     .desired_width(320.0),
             );
             submitted |=
                 location.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.separator();
-            submitted |= self.credentials.show_main_row(ui);
+            submitted |= self.credentials.show_main_row(ui, provider);
             ui.separator();
             ui.checkbox(&mut self.include_versions, "Versions")
-                .on_hover_text("Include noncurrent versions and delete markers");
+                .on_hover_text(provider.versions_help());
 
             if self.is_scanning() {
                 if ui.button("Stop").clicked()
@@ -240,11 +252,12 @@ impl App {
                 scan_clicked = ui.button("Scan").clicked();
             }
             estimate_clicked = ui
-                .button("Estimate")
+                .add_enabled(provider == Provider::S3, egui::Button::new("Estimate"))
                 .on_hover_text(
                     "Bucket size, object count, monthly cost, and what a full scan would \
                      cost, from CloudWatch without listing (needs cloudwatch:GetMetricData)",
                 )
+                .on_disabled_hover_text("Estimates are only available for Amazon S3 so far.")
                 .clicked();
             ui.separator();
             if ui
@@ -255,7 +268,7 @@ impl App {
                 self.help.toggle();
             }
         });
-        submitted |= self.credentials.show_access_key_row(ui);
+        submitted |= self.credentials.show_secret_row(ui, provider);
 
         if (scan_clicked || submitted) && !self.is_scanning() {
             self.start_scan_from_inputs(ui.ctx());
@@ -272,16 +285,16 @@ impl App {
                 return;
             }
             let Some(scan) = &self.scan else {
-                ui.label("Enter an S3 location and press Scan.");
+                ui.label("Enter a location and press Scan.");
                 return;
             };
 
             let total = scan.tree.total();
             let summary = format!(
-                "{}  {} in {} objects",
+                "{}  {} in {}",
                 scan.location,
                 format_bytes(total.bytes),
-                format_count(total.objects)
+                format_counted(total.objects, "object")
             );
             let elapsed = scan.elapsed().as_secs_f64();
             let uploads = scan.tree.usage_by_kind(EntryKind::IncompleteUpload);
@@ -305,7 +318,7 @@ impl App {
             }
             if let Some(pricing) = &scan.pricing {
                 ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
-                    .on_hover_text(pricing_note(pricing));
+                    .on_hover_text(pricing.notes());
                 ui.separator();
             }
             match &scan.state {
@@ -361,14 +374,12 @@ impl eframe::App for App {
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        let bucket = self.location_input.trim().parse::<S3Location>().ok();
-        let bucket = bucket.as_ref().map(|location| {
-            if location.is_all_buckets() {
-                "*"
-            } else {
-                location.bucket.as_str()
-            }
-        });
+        // The policy in Help is for S3, filled in with the bucket being typed.
+        let location = self.location_input.trim().parse::<Location>().ok();
+        let bucket = location
+            .as_ref()
+            .filter(|location| location.provider() == Provider::S3)
+            .map(|location| location.bucket().unwrap_or("*"));
         self.help.show(ui.ctx(), bucket);
         self.estimate_window(ui.ctx());
 
@@ -448,7 +459,7 @@ impl eframe::App for App {
                     root,
                     &mut color_mode,
                     colors,
-                    scan.include_versions,
+                    scan,
                     view.filter.as_ref(),
                 );
                 if let Some(Filter::Prefix(prefix)) = clicked {
@@ -482,7 +493,7 @@ impl eframe::App for App {
                     }
                 }
                 ListTab::LargestFiles => {
-                    let per_bucket = scan.location.is_all_buckets();
+                    let per_bucket = scan.location.is_all();
                     let action =
                         view.largest
                             .show(ui, filtered, root, per_bucket, colors, view.selected);
@@ -583,9 +594,9 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
                 let text = |text: String| egui::RichText::new(text).color(visuals.stroke.color);
                 ui.label(text(format!("Filtered: {label}")).strong());
                 let mut summary = format!(
-                    "{} in {} objects ({share:.1}% of {})",
+                    "{} in {} ({share:.1}% of {})",
                     format_bytes(usage.bytes),
-                    format_count(usage.objects),
+                    format_counted(usage.objects, "object"),
                     format_bytes(total.bytes),
                 );
                 if filtered.tree.has_pricing() {
@@ -604,17 +615,6 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
         .inner
 }
 
-fn pricing_note(pricing: &S3Pricing) -> String {
-    format!(
-        "Estimated storage cost from {} list prices (AWS Price List, {}).
-         First volume tier; Intelligent-Tiering at Frequent Access rates.
-         Includes minimum billable sizes and archive overhead; excludes requests,
-         retrieval, data transfer, and minimum storage duration charges.",
-        pricing.region_label(),
-        S3Pricing::published()
-    )
-}
-
 /// Skipped buckets and checks that could not run, with the details on hover.
 fn warnings(ui: &mut egui::Ui, stats: &ScanStats) {
     let skipped = stats
@@ -626,9 +626,13 @@ fn warnings(ui: &mut egui::Ui, stats: &ScanStats) {
         return;
     }
     let summary = match (stats.skipped_buckets.len(), stats.warnings.len()) {
-        (0, warnings) => format!("{warnings} warnings"),
-        (buckets, 0) => format!("{buckets} buckets skipped"),
-        (buckets, warnings) => format!("{buckets} buckets skipped, {warnings} warnings"),
+        (0, warnings) => format_counted(warnings as u64, "warning"),
+        (buckets, 0) => format!("{} skipped", format_counted(buckets as u64, "bucket")),
+        (buckets, warnings) => format!(
+            "{} skipped, {}",
+            format_counted(buckets as u64, "bucket"),
+            format_counted(warnings as u64, "warning")
+        ),
     };
     ui.colored_label(ui.visuals().warn_fg_color, summary)
         .on_hover_text(details.join("\n"));

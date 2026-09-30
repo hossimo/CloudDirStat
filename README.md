@@ -228,7 +228,7 @@ cargo run --release -p clouddirstat-gui --features demo -- s3://
 
 ## Troubleshooting
 
-**`could not load AWS credentials ... could not parse profile file`**
+**`could not sign in ... could not load AWS credentials: ... could not parse profile file`**
 
 The AWS SDK for Rust is stricter than the AWS CLI about the format of `~/.aws/config` and `~/.aws/credentials`. The usual cause is an indented setting directly under a profile header:
 

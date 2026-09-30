@@ -1,6 +1,6 @@
 //! The Estimate window: bucket totals and scan cost from CloudWatch, without listing.
 
-use clouddirstat_core::{format_bytes, format_count, format_usd};
+use clouddirstat_core::{format_bytes, format_count, format_counted, format_usd};
 use clouddirstat_providers::Error;
 use clouddirstat_providers::s3::{Estimate, S3Pricing, list_cost_usd};
 use eframe::egui::{self, Align, Label, RichText, Sense};
@@ -17,7 +17,7 @@ const ROW_HEIGHT: f32 = 20.0;
 /// What the user did in the window.
 pub enum Action {
     /// Scan the estimated location.
-    Scan(ScanRequest),
+    Scan(Box<ScanRequest>),
     /// Put this bucket in the Location field.
     Choose(String),
 }
@@ -111,8 +111,8 @@ impl EstimateTask {
 
 #[cfg(not(feature = "demo"))]
 async fn fetch(request: &ScanRequest) -> clouddirstat_providers::Result<Estimate> {
-    use clouddirstat_providers::s3::S3Scanner;
-    S3Scanner::connect(&request.location, &request.credentials, None)
+    use clouddirstat_providers::Scanner;
+    Scanner::connect(&request.location, &request.credentials, None)
         .await?
         .estimate()
         .await
@@ -128,9 +128,9 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
         .map_or_else(|| "no data yet".to_owned(), |date| date.to_string());
     ui.label(
         RichText::new(format!(
-            "{} in {} objects  ·  ~{}/mo",
+            "{} in {}  ·  ~{}/mo",
             format_bytes(estimate.bytes()),
-            format_count(estimate.objects()),
+            format_counted(estimate.objects(), "object"),
             format_usd(estimate.monthly_cost())
         ))
         .heading(),
@@ -146,7 +146,7 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
         estimate.request_cost_usd(),
         S3Pricing::published()
     ));
-    if !request.location.prefix.is_empty() {
+    if !request.location.prefix().is_empty() {
         ui.colored_label(
             ui.visuals().warn_fg_color,
             "Totals are for the whole bucket; CloudWatch does not report prefixes.",
@@ -169,7 +169,7 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
         }
     });
 
-    if request.location.is_all_buckets() {
+    if request.location.is_all() {
         ui.add_space(8.0);
         if let Some(bucket) = bucket_table(ui, estimate) {
             action = Some(Action::Choose(bucket));
@@ -189,7 +189,7 @@ fn contents(ui: &mut egui::Ui, request: &ScanRequest, estimate: &Estimate) -> Op
     );
     ui.add_space(4.0);
     if ui.button(format!("Scan {}", request.location)).clicked() {
-        action = Some(Action::Scan(request.clone()));
+        action = Some(Action::Scan(Box::new(request.clone())));
     }
     action
 }

@@ -61,7 +61,7 @@ impl HelpWindow {
 fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>) {
     about(ui, logo);
     ui.separator();
-    ui.heading("Permissions");
+    ui.heading("Amazon S3: permissions");
     ui.label(
         "CloudDirStat only lists your bucket (and reads its storage metrics from \
          CloudWatch). It never reads object contents and never writes or deletes anything.",
@@ -128,7 +128,7 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
     );
 
     ui.add_space(12.0);
-    ui.heading("Signing in");
+    ui.heading("Amazon S3: signing in");
     ui.label(RichText::new("Recommended: short-lived credentials in a profile").strong());
     ui.label("• Console sign-in (AWS CLI v2):  aws login --profile NAME");
     ui.label("• IAM Identity Center (SSO):  aws configure sso, then aws sso login --profile NAME");
@@ -140,6 +140,86 @@ fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>)
          temporary credentials. Keys stay in memory for this session only; they are never \
          saved to disk or logged. Create keys for an IAM user or role that has only the \
          policy above.",
+    );
+
+    ui.add_space(12.0);
+    google(ui);
+    ui.add_space(12.0);
+    azure(ui);
+}
+
+fn azure(ui: &mut egui::Ui) {
+    ui.heading("Azure Blob Storage");
+    ui.label(
+        "Sign in once with az login (Azure CLI), then choose Azure CLI; CloudDirStat asks the \
+         CLI for tokens as it goes. SAS token takes a shared access signature for one \
+         account or container instead. az://ACCOUNT lists every container of an account; \
+         az:// every account you can see.",
+    );
+    ui.add_space(4.0);
+    egui::Grid::new("azure permissions")
+        .num_columns(3)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.strong("Role");
+            ui.strong("Needed");
+            ui.strong("Used for");
+            ui.end_row();
+
+            ui.monospace("Storage Blob Data Reader");
+            ui.label("Always");
+            ui.label("Listing containers and blobs (on the account or container)");
+            ui.end_row();
+
+            ui.monospace("Reader");
+            ui.label("Optional");
+            ui.label("The account's region and redundancy, for prices; needed for az://");
+            ui.end_row();
+        });
+    ui.weak(
+        "Owner or Contributor of the subscription does not include reading blobs: add \
+         Storage Blob Data Reader too. Without Reader, prices are eastus LRS rates. \
+         Versions adds blob versions, snapshots, and soft-deleted blobs.",
+    );
+}
+
+fn google(ui: &mut egui::Ui) {
+    ui.heading("Google Cloud Storage");
+    ui.label(
+        "Sign in once with gcloud auth application-default login (or set \
+         GOOGLE_APPLICATION_CREDENTIALS to a service account key file), then choose Google \
+         login. Access token takes the output of gcloud auth print-access-token instead; \
+         it lasts about an hour and is kept in memory only. gs:// on its own lists every \
+         bucket of the project in Project (or gcloud's project).",
+    );
+    ui.add_space(4.0);
+    egui::Grid::new("google permissions")
+        .num_columns(3)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.strong("Permission");
+            ui.strong("Needed");
+            ui.strong("Used for");
+            ui.end_row();
+
+            ui.monospace("storage.objects.list");
+            ui.label("Always");
+            ui.label("Listing objects (in the Storage Object Viewer role)");
+            ui.end_row();
+
+            ui.monospace("storage.buckets.get");
+            ui.label("Optional");
+            ui.label("The bucket's location, for prices (otherwise us-central1 prices)");
+            ui.end_row();
+
+            ui.monospace("storage.buckets.list");
+            ui.label("For gs://");
+            ui.label("Finding every bucket of the project");
+            ui.end_row();
+        });
+    ui.weak(
+        "Storage Object Viewer covers listing. For the rest, give a custom role these \
+         three permissions. Versions adds old versions and soft-deleted objects.",
     );
 }
 

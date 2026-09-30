@@ -26,9 +26,20 @@ const CATEGORY_COLORS: [Color32; 12] = [
     Color32::from_rgb(0xd3, 0x72, 0xe0),
 ];
 
+/// A color per storage class. Classes of other providers get the color of the S3 class
+/// closest in temperature.
 pub fn storage_class(class: &str) -> Color32 {
     match class {
-        "STANDARD" => Color32::from_rgb(0x4e, 0x79, 0xa7),
+        // Google Cloud Storage; MULTI_REGIONAL and REGIONAL are legacy names of Standard.
+        "STANDARD" | "MULTI_REGIONAL" | "REGIONAL" => Color32::from_rgb(0x4e, 0x79, 0xa7),
+        "NEARLINE" => Color32::from_rgb(0x59, 0xa1, 0x4f),
+        "COLDLINE" => Color32::from_rgb(0x76, 0xb7, 0xb2),
+        "ARCHIVE" => Color32::from_rgb(0xe1, 0x57, 0x59),
+        // Azure Blob Storage access tiers.
+        "Hot" => Color32::from_rgb(0x4e, 0x79, 0xa7),
+        "Cool" => Color32::from_rgb(0x59, 0xa1, 0x4f),
+        "Cold" => Color32::from_rgb(0x76, 0xb7, 0xb2),
+        "Archive" => Color32::from_rgb(0xe1, 0x57, 0x59),
         "INTELLIGENT_TIERING" => Color32::from_rgb(0xb0, 0x7a, 0xa1),
         "STANDARD_IA" => Color32::from_rgb(0x59, 0xa1, 0x4f),
         "ONEZONE_IA" => Color32::from_rgb(0x8c, 0xd1, 0x7d),

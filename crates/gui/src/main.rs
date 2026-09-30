@@ -17,7 +17,9 @@ mod treemap_view;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use clouddirstat_providers::s3::{CredentialSource, S3Location};
+use clouddirstat_providers::azure::AzureCredentials;
+use clouddirstat_providers::s3::CredentialSource;
+use clouddirstat_providers::{Credentials, Location};
 use eframe::egui;
 
 use crate::app::App;
@@ -29,8 +31,9 @@ use crate::scan::ScanRequest;
     about = "Treemap view of cloud object storage usage"
 )]
 struct Cli {
-    /// s3://bucket or s3://bucket/prefix/ to scan on startup
-    location: Option<S3Location>,
+    /// s3://bucket/prefix/, gs://bucket/prefix/, or az://account/container/prefix/ to scan
+    /// on startup
+    location: Option<Location>,
 
     /// AWS profile from ~/.aws/config (including IAM Identity Center and `aws login`
     /// profiles). Access keys can be entered in the app instead.
@@ -43,12 +46,18 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    // Secrets such as AZURE_STORAGE_KEY can live in a .env file; a missing file is fine.
+    let _ = dotenvy::dotenv();
     let cli = Cli::parse();
     let runtime = tokio::runtime::Runtime::new()?;
     let initial_scan = cli.location.map(|location| ScanRequest {
         location,
-        credentials: CredentialSource::Chain {
-            profile: cli.profile.clone(),
+        credentials: Credentials {
+            aws: CredentialSource::Chain {
+                profile: cli.profile.clone(),
+            },
+            azure: AzureCredentials::from_env(),
+            ..Credentials::default()
         },
         include_versions: cli.versions,
     });

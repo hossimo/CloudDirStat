@@ -7,8 +7,11 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use clouddirstat_core::{Tree, format_count};
-use clouddirstat_providers::s3::{CredentialSource, S3Location, S3Scanner, ScanOptions};
+use clouddirstat_core::{Tree, format_count, format_counted};
+use clouddirstat_providers::azure::AzureCredentials;
+use clouddirstat_providers::gcs::GcsCredentials;
+use clouddirstat_providers::s3::CredentialSource;
+use clouddirstat_providers::{Credentials, Location, ScanOptions, Scanner};
 use tokio::sync::mpsc;
 
 use crate::report::{Report, ReportOptions};
@@ -27,9 +30,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scan an S3 bucket, a prefix, or all buckets and print a usage report
+    /// Scan a bucket, a prefix, or all buckets and print a usage report
     Scan(ScanArgs),
-    /// Show bucket totals from CloudWatch and what a full scan would cost, without
+    /// Show S3 bucket totals from CloudWatch and what a full scan would cost, without
     /// listing anything (requires cloudwatch:GetMetricData)
     Estimate(TargetArgs),
 }
@@ -37,9 +40,10 @@ enum Command {
 /// Where to look, and as whom.
 #[derive(Args)]
 struct TargetArgs {
-    /// s3://bucket, s3://bucket/prefix/, or s3:// for every bucket
-    /// (all buckets needs s3:ListAllMyBuckets)
-    location: S3Location,
+    /// s3://bucket/prefix/ (Amazon S3), gs://bucket/prefix/ (Google Cloud Storage), or
+    /// az://account/container/prefix/ (Azure Blob Storage); s3://, gs://, or az:// alone
+    /// for every bucket (az://account for every container of an account)
+    location: Location,
 
     /// AWS profile from ~/.aws/config (including IAM Identity Center and `aws login`
     /// profiles). Access keys can be given with the AWS_ACCESS_KEY_ID,
@@ -50,14 +54,31 @@ struct TargetArgs {
     /// Bucket region; looked up automatically when omitted
     #[arg(long)]
     region: Option<String>,
+
+    /// Google Cloud project whose buckets gs:// lists; defaults to gcloud's project.
+    /// Google sign-in uses Application Default Credentials (`gcloud auth
+    /// application-default login`), or an access token in GOOGLE_OAUTH_ACCESS_TOKEN.
+    /// Azure sign-in uses the Azure CLI (`az login`), a SAS token in
+    /// AZURE_STORAGE_SAS_TOKEN, or an account key in AZURE_STORAGE_KEY (or a connection
+    /// string in AZURE_STORAGE_CONNECTION_STRING). Variables can also be set in a .env
+    /// file in the current directory.
+    #[arg(long)]
+    project: Option<String>,
 }
 
 impl TargetArgs {
-    async fn connect(&self) -> Result<S3Scanner> {
-        let credentials = CredentialSource::Chain {
-            profile: self.profile.clone(),
+    async fn connect(&self) -> Result<Scanner> {
+        let credentials = Credentials {
+            aws: CredentialSource::Chain {
+                profile: self.profile.clone(),
+            },
+            gcs: GcsCredentials {
+                access_token: std::env::var("GOOGLE_OAUTH_ACCESS_TOKEN").ok(),
+                project: self.project.clone(),
+            },
+            azure: AzureCredentials::from_env(),
         };
-        Ok(S3Scanner::connect(&self.location, &credentials, self.region.as_deref()).await?)
+        Ok(Scanner::connect(&self.location, &credentials, self.region.as_deref()).await?)
     }
 }
 
@@ -85,6 +106,8 @@ struct ScanArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Secrets such as AZURE_STORAGE_KEY can live in a .env file; a missing file is fine.
+    let _ = dotenvy::dotenv();
     match Cli::parse().command {
         Command::Scan(args) => scan(args).await,
         Command::Estimate(args) => {
@@ -105,14 +128,14 @@ async fn scan(args: ScanArgs) -> Result<()> {
     let started = Instant::now();
     let scanner = Arc::new(args.target.connect().await?);
 
-    let pricing = Arc::new(scanner.pricing());
+    let pricing = scanner.pricing();
     let options = ScanOptions {
         include_versions: args.versions,
         concurrency: args.concurrency,
     };
     let (sender, mut receiver) = mpsc::channel(256);
     // CloudWatch's object count, for progress. It covers whole buckets only.
-    let mut expected = args.target.location.prefix.is_empty().then(|| {
+    let mut expected = args.target.location.prefix().is_empty().then(|| {
         let scanner = Arc::clone(&scanner);
         tokio::spawn(async move { scanner.object_counts().await })
     });
@@ -147,7 +170,7 @@ async fn scan(args: ScanArgs) -> Result<()> {
                     format_count(total),
                     progress_percent(scanned, total)
                 ),
-                None => eprint!("\rScanned {} objects...", format_count(scanned)),
+                None => eprint!("\rScanned {}...", format_counted(scanned, "object")),
             }
             std::io::stderr().flush()?;
             next_progress = scanned + PROGRESS_INTERVAL;
@@ -173,7 +196,7 @@ async fn scan(args: ScanArgs) -> Result<()> {
     Report {
         tree: &tree,
         location: &args.target.location,
-        pricing: &pricing,
+        pricing: pricing.as_ref(),
         stats,
         elapsed: started.elapsed(),
         options: ReportOptions {

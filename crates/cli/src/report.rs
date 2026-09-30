@@ -1,9 +1,11 @@
 use std::time::Duration;
 
+use clouddirstat_core::Pricing;
 use clouddirstat_core::{
-    EntryKind, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_usd,
+    EntryKind, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_counted,
+    format_usd,
 };
-use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
+use clouddirstat_providers::{Location, ScanStats};
 
 pub struct ReportOptions {
     pub depth: usize,
@@ -13,8 +15,8 @@ pub struct ReportOptions {
 
 pub struct Report<'a> {
     pub tree: &'a Tree,
-    pub location: &'a S3Location,
-    pub pricing: &'a S3Pricing,
+    pub location: &'a Location,
+    pub pricing: &'a dyn Pricing,
     pub stats: ScanStats,
     pub elapsed: Duration,
     pub options: ReportOptions,
@@ -34,10 +36,10 @@ impl Report<'_> {
     fn print_summary(&self) {
         let total = self.tree.total();
         println!(
-            "{}  {} in {} objects",
+            "{}  {} in {}",
             self.location,
             format_bytes(total.bytes),
-            format_count(total.objects)
+            format_counted(total.objects, "object")
         );
         println!(
             "Scanned in {:.1}s using {} LIST requests (~${:.4})",
@@ -46,18 +48,17 @@ impl Report<'_> {
             self.stats.estimated_cost_usd()
         );
         println!(
-            "Estimated storage cost ~{}/month ({} list prices from {})",
+            "Estimated storage cost ~{}/month ({})",
             format_usd(total.monthly_cost),
-            self.pricing.region_label(),
-            S3Pricing::published()
+            self.pricing.source()
         );
 
         let uploads = self.tree.usage_by_kind(EntryKind::IncompleteUpload);
         if uploads.objects > 0 {
             println!(
-                "Incomplete multipart uploads: {} in {} uploads (~{}/month), not shown by normal listings",
+                "Incomplete multipart uploads: {} in {} (~{}/month), not shown by normal listings",
                 format_bytes(uploads.bytes),
-                format_count(uploads.objects),
+                format_counted(uploads.objects, "upload"),
                 format_usd(uploads.monthly_cost)
             );
         }
@@ -72,7 +73,7 @@ impl Report<'_> {
 
     fn print_versions(&self) {
         section("By version state");
-        for kind in EntryKind::ALL {
+        for &kind in self.location.provider().entry_kinds() {
             self.print_usage_row(kind.label(), self.tree.usage_by_kind(kind));
         }
     }
@@ -139,7 +140,7 @@ impl Report<'_> {
 
     /// The largest objects overall, or the largest in each bucket for `s3://`.
     fn print_largest_objects(&self) {
-        if !self.location.is_all_buckets() {
+        if !self.location.is_all() {
             section("Largest objects");
             self.print_objects(self.tree.largest_objects(self.options.top));
             return;

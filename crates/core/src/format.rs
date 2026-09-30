@@ -17,6 +17,13 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// `count` with thousands separators and `noun`, plural unless there is exactly one:
+/// `1 object`, `1,234 objects`.
+pub fn format_counted(count: u64, noun: &str) -> String {
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{} {noun}{plural}", format_count(count))
+}
+
 pub fn format_count(count: u64) -> String {
     let digits = count.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
@@ -41,6 +48,13 @@ pub fn format_usd(cost: Cost) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_nouns() {
+        assert_eq!(format_counted(0, "object"), "0 objects");
+        assert_eq!(format_counted(1, "object"), "1 object");
+        assert_eq!(format_counted(1234, "warning"), "1,234 warnings");
+    }
 
     #[test]
     fn formats_bytes_with_binary_units() {

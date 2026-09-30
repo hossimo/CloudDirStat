@@ -42,7 +42,9 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 
 ## Quick start
 
-1. **Download** the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system (Windows, macOS, or Linux; x64 or ARM64) and unzip it. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
+1. **Download** the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system:
+   - **Mac:** `CloudDirStat-…-macos.dmg`. Open it and drag **CloudDirStat** to **Applications**. It runs natively on both Apple Silicon and Intel Macs. The first start needs one extra step, and the command line is a separate download: see [On a Mac](#on-a-mac).
+   - **Windows and Linux** (x64 or ARM64): the archive for your system. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
 2. **Sign in** to your cloud with its own command-line tool. This is a one-time step; see [Connect to your cloud](#connect-to-your-cloud) for details and for key-based sign-in.
 
    | Cloud | Sign in once with |
@@ -51,7 +53,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
    | Google Cloud | `gcloud auth application-default login` |
    | Azure | `az login` |
 
-3. **Scan.** Start `clouddirstat-gui`, choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
+3. **Scan.** Start the app (**CloudDirStat** on a Mac, `clouddirstat-gui` on Windows and Linux), choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
 
    ```sh
    clouddirstat scan s3://my-bucket
@@ -59,7 +61,27 @@ The project is in early development. If a Google or Azure scan fails or shows wr
    clouddirstat scan az://mystorageaccount/mycontainer
    ```
 
-The binaries are not code-signed yet. On macOS, clear the download quarantine before the first run with `xattr -d com.apple.quarantine clouddirstat clouddirstat-gui`. On Windows, SmartScreen may warn about an unrecognized app; choose **More info → Run anyway**.
+The programs are not code-signed with a developer certificate yet. On Windows, SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway**. For the Mac, see below.
+
+### On a Mac
+
+**Opening the app the first time.** Until CloudDirStat is signed by a registered Apple developer, macOS blocks it the first time you open it and says it can't verify the developer. You only need to allow it once:
+
+- **macOS 15 Sequoia and later:** double-click **CloudDirStat** in Applications and close the warning (**Done**). Then open **System Settings → Privacy & Security**, scroll down to the message about CloudDirStat, click **Open Anyway**, and confirm. (Apple removed the right-click shortcut below in macOS 15.)
+- **macOS 14 Sonoma and earlier:** in Applications, right-click (or Control-click) **CloudDirStat**, choose **Open**, then click **Open** again in the dialog.
+- **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`
+
+**The command line is a separate download.** The DMG contains only the app. To use the `clouddirstat` command in Terminal, also download `clouddirstat-…-macos.tar.gz` (one program for both Apple Silicon and Intel Macs) and install it:
+
+```sh
+cd ~/Downloads
+tar -xzf clouddirstat-*-macos.tar.gz        # skip if Safari already unpacked it
+cd clouddirstat-*-macos/
+xattr -d com.apple.quarantine clouddirstat  # allow it to run (not code-signed yet)
+sudo mkdir -p /usr/local/bin
+sudo mv clouddirstat /usr/local/bin/        # or any folder on your PATH
+clouddirstat --version
+```
 
 ## Locations
 
@@ -233,7 +255,7 @@ The region lookup always goes through the Azure CLI, even when blobs are listed 
 
 ### Keeping keys in a `.env` file
 
-Instead of setting environment variables in every terminal, you can put them in a file named `.env` in the folder you start CloudDirStat from. Both programs read it at startup, and the app fills in its sign-in fields from it:
+Instead of setting environment variables in every terminal, you can put them in a file named `.env` in the folder you start CloudDirStat from. Both programs read it at startup, and the app fills in its sign-in fields from it. (The Mac app opened from Finder or the Dock doesn't start in a folder of yours, so it can't find a `.env`; sign in with your cloud's CLI there, or paste keys into the app.)
 
 ```sh
 AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...
@@ -443,20 +465,26 @@ Versions come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and 
 
 ### Making a release
 
-Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets and attaches the archives. To rebuild the files of an existing release, run the workflow by hand from the Actions tab with that tag; with no tag it only builds, which is useful for testing.
+Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line, and attaches everything: two files for Mac, and one archive per Windows and Linux target. To rebuild the files of an existing release, run the workflow by hand from the Actions tab with that tag; with no tag it only builds, which is useful for testing.
 
 </details>
 
 ## Roadmap
 
-Done: S3, Google Cloud Storage, and Azure scanning; folder list and treemap with zoom; cost estimates; old versions and incomplete uploads; scanning every bucket at once; largest files; filters; last modified dates; S3 estimates from CloudWatch; release builds for six platforms.
+Done: S3, Google Cloud Storage, and Azure scanning; folder list and treemap with zoom; cost estimates; old versions and incomplete uploads; scanning every bucket at once; largest files; filters; last modified dates; S3 estimates from CloudWatch; release builds for six platforms; a universal Mac app.
 
 Next:
 
 - [ ] More testing of Google Cloud Storage and Azure on real, larger buckets
 - [ ] Estimates without scanning for Google Cloud Storage and Azure
 - [ ] Read S3 Inventory reports for billion-object buckets
-- [ ] macOS app bundle and code signing
+- [ ] Code signing for Mac and Windows (see below)
+
+### Code signing needs funding
+
+I want to code-sign the Mac and Windows builds, so CloudDirStat opens like any other app, without the first-start steps described in [Quick start](#quick-start) and [On a Mac](#on-a-mac). Signing isn't free, though: Apple charges a yearly membership in its Developer Program (USD 99 per year) to sign and notarize Mac apps, and Windows signing needs a code-signing certificate or signing service, which also has a yearly cost.
+
+CloudDirStat is free and open source, so I will need to find funding to cover these costs before the builds can be signed. Until then, the builds work fully; they just need the one-time workaround the first time you open them.
 
 ## AI disclosure
 

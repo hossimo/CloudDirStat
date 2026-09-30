@@ -3,7 +3,9 @@ use std::time::{Duration, Instant};
 use clouddirstat_core::{
     Filtered, NodeId, NodeKind, VersionState, format_bytes, format_count, format_usd, squarify,
 };
-use eframe::egui::{self, Color32, Pos2, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions};
+use eframe::egui::{
+    self, Color32, PointerButton, Pos2, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
+};
 
 use crate::cushion;
 use crate::palette::{self, Colors};
@@ -12,6 +14,15 @@ use crate::palette::{self, Colors};
 const MIN_AREA: f32 = 1.5;
 /// Redraw at most this often while the window is being resized.
 const REDRAW_INTERVAL: Duration = Duration::from_millis(150);
+/// What the user did in the treemap.
+pub enum Action {
+    Select(NodeId),
+    /// Double-click: show this folder, one level below the current root, on its own.
+    ZoomIn(NodeId),
+    /// Right-click or the mouse back button: show the current root's parent.
+    ZoomOut,
+}
+
 #[derive(Default)]
 pub struct TreemapView {
     /// Node rectangles in screen points, parents before children.
@@ -28,7 +39,7 @@ impl TreemapView {
         self.stale = true;
     }
 
-    /// Draws the treemap and returns the node that was clicked, if any.
+    /// Draws the treemap with `root` filling it, and returns what the user did.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -36,7 +47,7 @@ impl TreemapView {
         root: NodeId,
         colors: &Colors,
         selected: Option<NodeId>,
-    ) -> Option<NodeId> {
+    ) -> Option<Action> {
         let tree = view.tree;
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
         let bounds = response.rect;
@@ -64,7 +75,19 @@ impl TreemapView {
         let hovered = response
             .hover_pos()
             .and_then(|pointer| self.node_at(pointer));
-        let clicked = hovered.filter(|_| response.clicked());
+        let action = if response.secondary_clicked() || response.clicked_by(PointerButton::Extra1) {
+            Some(Action::ZoomOut)
+        } else if response.double_clicked() {
+            // Zoom one level at a time toward the object under the pointer.
+            hovered
+                .and_then(|id| tree.child_toward(root, id))
+                .filter(|&child| tree.node(child).kind() == NodeKind::Directory)
+                .map(Action::ZoomIn)
+        } else if response.clicked() {
+            hovered.map(Action::Select)
+        } else {
+            None
+        };
         if let Some(id) = hovered {
             let folder = tree.node(id).parent().filter(|&parent| parent != root);
             if let Some(rect) = folder.and_then(|folder| self.rect_of(folder)) {
@@ -75,7 +98,7 @@ impl TreemapView {
             }
             response.on_hover_ui_at_pointer(|ui| node_tooltip(ui, view, root, id));
         }
-        clicked
+        action
     }
 
     fn redraw(

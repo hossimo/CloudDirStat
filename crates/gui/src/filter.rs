@@ -43,12 +43,13 @@ impl Filter {
                 Subset::new(tree, |id| tree.version_state(id) == Some(*state))
             }
             Self::Prefix(prefix) => {
-                Subset::new(tree, |id| top_level(tree, root, id) == Some(*prefix))
+                Subset::new(tree, |id| tree.child_toward(root, id) == Some(*prefix))
             }
             Self::OtherPrefixes => {
                 let top: HashSet<NodeId> = palette::top_prefixes(tree, root).into_iter().collect();
                 Subset::new(tree, |id| {
-                    top_level(tree, root, id).is_some_and(|outer| !top.contains(&outer))
+                    tree.child_toward(root, id)
+                        .is_some_and(|outer| !top.contains(&outer))
                 })
             }
             Self::FileType(file_type) => {
@@ -76,16 +77,4 @@ pub fn file_type_label(file_type: &str) -> String {
     } else {
         format!(".{file_type}")
     }
-}
-
-/// The child of `root` that `id` is in (or is), or `None` when `id` is not under `root`.
-fn top_level(tree: &Tree, root: NodeId, id: NodeId) -> Option<NodeId> {
-    let mut current = id;
-    while let Some(parent) = tree.node(current).parent() {
-        if parent == root {
-            return Some(current);
-        }
-        current = parent;
-    }
-    None
 }

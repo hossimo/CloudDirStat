@@ -1,6 +1,7 @@
 mod arena;
 #[cfg(feature = "demo")]
 pub mod demo;
+mod filter;
 mod format;
 mod tree;
 mod treemap;
@@ -20,6 +21,7 @@ pub const LONG_VERSION: &str = concat!(
     ")"
 );
 
+pub use filter::{Filtered, Subset};
 pub use format::{format_bytes, format_count, format_usd};
 pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
 pub use treemap::{Rect, squarify};

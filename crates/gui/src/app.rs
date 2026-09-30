@@ -1,11 +1,14 @@
 use std::time::{Duration, Instant};
 
-use clouddirstat_core::{EntryKind, NodeId, format_bytes, format_count, format_usd};
+use clouddirstat_core::{
+    EntryKind, Filtered, NodeId, Subset, format_bytes, format_count, format_usd,
+};
 use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
 use eframe::egui;
 use tokio::runtime::Runtime;
 
 use crate::credentials_form::CredentialsForm;
+use crate::filter::Filter;
 use crate::help::HelpWindow;
 use crate::legend;
 use crate::palette::{ColorMode, Colors};
@@ -35,6 +38,10 @@ pub struct App {
 struct View {
     color_mode: ColorMode,
     colors: Option<Colors>,
+    /// Limits the folder list and treemap to one legend row's objects.
+    filter: Option<Filter>,
+    /// The objects that pass `filter`, recomputed with the colors.
+    subset: Option<Subset>,
     selected: Option<NodeId>,
     tree_view: TreeView,
     treemap: TreemapView,
@@ -47,6 +54,8 @@ impl View {
         Self {
             color_mode,
             colors: None,
+            filter: None,
+            subset: None,
             selected: None,
             tree_view: TreeView::default(),
             treemap: TreemapView::default(),
@@ -63,10 +72,26 @@ impl View {
             return;
         }
         self.colors = Some(Colors::new(self.color_mode, &scan.tree, scan.root()));
+        self.subset = self
+            .filter
+            .as_ref()
+            .map(|filter| filter.subset(&scan.tree, scan.root()));
         self.tree_view.invalidate();
         self.treemap.invalidate();
         self.changed = false;
         self.refreshed_at = Some(Instant::now());
+    }
+
+    /// Sets the filter, or clears it when `filter` is the one already set.
+    fn toggle_filter(&mut self, filter: Filter) {
+        let filter = (self.filter.as_ref() != Some(&filter)).then_some(filter);
+        self.set_filter(filter);
+    }
+
+    fn set_filter(&mut self, filter: Option<Filter>) {
+        self.filter = filter;
+        self.changed = true;
+        self.refreshed_at = None;
     }
 }
 
@@ -276,6 +301,13 @@ impl eframe::App for App {
         };
         let tree = &scan.tree;
         let root = scan.root();
+        let filtered = Filtered::new(tree, view.subset.as_ref());
+        // The subset catches up with a new filter on the next refresh.
+        let filter_pending = view.filter.is_some() != view.subset.is_some();
+        let mut new_filter = None;
+        let mut clear_filter = view.filter.is_some()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|input| input.key_pressed(egui::Key::Escape));
 
         if !scan.is_running() {
             let available = ui.available_height();
@@ -285,7 +317,16 @@ impl eframe::App for App {
                 // Always leave a few rows of the folder list visible.
                 .max_size(available * 0.8)
                 .show(ui, |ui| {
-                    if let Some(clicked) = view.treemap.show(ui, tree, root, colors, view.selected)
+                    if view.filter.is_some() && filtered.usage(root).objects == 0 {
+                        ui.centered_and_justified(|ui| {
+                            ui.weak(if filter_pending {
+                                "Filtering…"
+                            } else {
+                                "Nothing matches the filter"
+                            })
+                        });
+                    } else if let Some(clicked) =
+                        view.treemap.show(ui, filtered, root, colors, view.selected)
                     {
                         view.selected = Some(clicked);
                         view.tree_view.reveal(tree, clicked);
@@ -307,18 +348,23 @@ impl eframe::App for App {
                     &mut color_mode,
                     colors,
                     scan.include_versions,
-                    view.selected,
+                    view.filter.as_ref(),
                 );
-                if let Some(prefix) = clicked {
+                if let Some(Filter::Prefix(prefix)) = clicked {
                     view.selected = Some(prefix);
                     view.tree_view.reveal(tree, prefix);
                 }
+                new_filter = clicked;
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(filter) = &view.filter {
+                clear_filter |= filter_bar(ui, &filter.label(tree), filtered, root);
+                ui.add_space(4.0);
+            }
             view.tree_view.show(
                 ui,
-                tree,
+                filtered,
                 root,
                 &scan.location.to_string(),
                 colors,
@@ -326,12 +372,57 @@ impl eframe::App for App {
             );
         });
 
+        if clear_filter {
+            view.set_filter(None);
+        } else if let Some(filter) = new_filter {
+            view.toggle_filter(filter);
+        }
         if color_mode != view.color_mode {
             view.color_mode = color_mode;
             view.changed = true;
             view.refreshed_at = None;
         }
     }
+}
+
+/// Shows which filter is on and what passes it. Returns whether Clear was clicked.
+fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) -> bool {
+    let visuals = ui.visuals().selection;
+    let usage = filtered.usage(root);
+    let total = filtered.tree.node(root).usage();
+    let share = if total.bytes == 0 {
+        0.0
+    } else {
+        usage.bytes as f64 * 100.0 / total.bytes as f64
+    };
+    egui::Frame::new()
+        .fill(visuals.bg_fill)
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let text = |text: String| egui::RichText::new(text).color(visuals.stroke.color);
+                ui.label(text(format!("Filtered: {label}")).strong());
+                let mut summary = format!(
+                    "{} in {} objects ({share:.1}% of {})",
+                    format_bytes(usage.bytes),
+                    format_count(usage.objects),
+                    format_bytes(total.bytes),
+                );
+                if filtered.tree.has_pricing() {
+                    summary += &format!(" · ~{}/mo", format_usd(usage.monthly_cost));
+                }
+                ui.label(text(summary));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.button("Clear filter")
+                        .on_hover_text("Show everything again (Esc)")
+                        .clicked()
+                })
+                .inner
+            })
+            .inner
+        })
+        .inner
 }
 
 fn pricing_note(pricing: &S3Pricing) -> String {

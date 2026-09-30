@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    NodeId, NodeKind, Tree, VersionState, format_bytes, format_count, format_usd, squarify,
+    Filtered, NodeId, NodeKind, VersionState, format_bytes, format_count, format_usd, squarify,
 };
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions};
 
@@ -32,11 +32,12 @@ impl TreemapView {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        tree: &Tree,
+        view: Filtered,
         root: NodeId,
         colors: &Colors,
         selected: Option<NodeId>,
     ) -> Option<NodeId> {
+        let tree = view.tree;
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
         let bounds = response.rect;
 
@@ -45,7 +46,7 @@ impl TreemapView {
                 .drawn_at
                 .is_none_or(|at| at.elapsed() >= REDRAW_INTERVAL);
             if due || self.texture.is_none() {
-                self.redraw(ui.ctx(), tree, root, colors, bounds);
+                self.redraw(ui.ctx(), view, root, colors, bounds);
             } else {
                 ui.ctx().request_repaint_after(REDRAW_INTERVAL);
             }
@@ -72,7 +73,7 @@ impl TreemapView {
             if let Some(rect) = self.rect_of(id) {
                 outline(&painter, rect, palette::HOVER);
             }
-            response.on_hover_ui_at_pointer(|ui| node_tooltip(ui, tree, root, id));
+            response.on_hover_ui_at_pointer(|ui| node_tooltip(ui, view, root, id));
         }
         clicked
     }
@@ -80,17 +81,18 @@ impl TreemapView {
     fn redraw(
         &mut self,
         ctx: &egui::Context,
-        tree: &Tree,
+        view: Filtered,
         root: NodeId,
         colors: &Colors,
         bounds: egui::Rect,
     ) {
+        let tree = view.tree;
         let pixels_per_point = ctx.pixels_per_point();
         let width = (bounds.width() * pixels_per_point).round().max(1.0);
         let height = (bounds.height() * pixels_per_point).round().max(1.0);
 
         let pixel_bounds = clouddirstat_core::Rect::new(0.0, 0.0, width, height);
-        let layout = squarify(tree, root, pixel_bounds, MIN_AREA);
+        let layout = squarify(view, root, pixel_bounds, MIN_AREA);
         let image = cushion::render(tree, &layout, [width as usize, height as usize], |id| {
             colors.node(tree, id)
         });
@@ -137,12 +139,13 @@ fn outline(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, color), StrokeKind::Inside);
 }
 
-fn node_tooltip(ui: &mut egui::Ui, tree: &Tree, root: NodeId, id: NodeId) {
+fn node_tooltip(ui: &mut egui::Ui, view: Filtered, root: NodeId, id: NodeId) {
+    let tree = view.tree;
     let node = tree.node(id);
     ui.strong(tree.name(id));
 
-    let usage = node.usage();
-    let total = tree.node(root).usage().bytes.max(1);
+    let usage = view.usage(id);
+    let total = view.usage(root).bytes.max(1);
     ui.label(format!(
         "{}  ({:.1}% of total)",
         format_bytes(usage.bytes),

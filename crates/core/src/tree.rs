@@ -9,7 +9,11 @@ use crate::{Cost, Entry, EntryKind, Pricing, Usage};
 pub struct NodeId(u32);
 
 impl NodeId {
-    fn index(self) -> usize {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -287,6 +291,12 @@ impl Tree {
         if let Some(new) = new_state {
             self.version_states[new as usize] += usage;
         }
+    }
+
+    /// Number of nodes, including the root. Node ids run from 0 to `node_count() - 1`, and
+    /// every node comes after its parent.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
     pub fn node(&self, id: NodeId) -> &Node {

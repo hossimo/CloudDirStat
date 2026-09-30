@@ -1,7 +1,7 @@
 name: Release
 
-# Publishing a GitHub release builds both binaries for every platform, plus a macOS
-# app (a universal CloudDirStat.app in a DMG), and attaches them to that release. Run it by hand to rebuild an existing release's assets
+# Publishing a GitHub release builds both programs for Windows and Linux, a universal
+# macOS app (CloudDirStat.app in a DMG) and command line, and attaches them to it. Run it by hand to rebuild an existing release's assets
 # (give its tag), or to test the build without a release (leave the tag empty).
 on:
   release:
@@ -45,7 +45,10 @@ jobs:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # Mac builds are not packaged here: the macos job turns the two into one universal
+      # app and one universal command line.
       - name: Package
+        if: ${{ !contains(matrix.target, 'apple-darwin') }}
         shell: bash
         run: |
           target="${{ matrix.target }}"
@@ -68,21 +71,28 @@ jobs:
           fi
           rm -rf "$name"
 
-      - uses: actions/upload-artifact@v7
+      - if: ${{ !contains(matrix.target, 'apple-darwin') }}
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
-      # The macos-app job joins the two Mac builds of the GUI into one app.
+      # Only passed on to the macos job, so it doesn't need to be kept.
       - if: contains(matrix.target, 'apple-darwin')
         uses: actions/upload-artifact@v7
         with:
-          name: gui-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/clouddirstat-gui
+          name: mac-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/clouddirstat
+            target/${{ matrix.target }}/release/clouddirstat-gui
+          retention-days: 1
           if-no-files-found: error
 
-  macos-app:
+  # Two Mac downloads: the app (universal CloudDirStat.app in a DMG) and the command
+  # line (one universal binary in a tar.gz). Universal = runs natively on Apple
+  # Silicon and Intel Macs, so nobody has to pick one.
+  macos:
     needs: build
     runs-on: macos-latest
     steps:
@@ -91,12 +101,13 @@ jobs:
           ref: ${{ env.TAG || github.ref }}
       - uses: actions/download-artifact@v8
         with:
-          name: gui-aarch64-apple-darwin
-          path: gui/arm64
+          name: mac-aarch64-apple-darwin
+          path: mac/arm64
       - uses: actions/download-artifact@v8
         with:
-          name: gui-x86_64-apple-darwin
-          path: gui/x86_64
+          name: mac-x86_64-apple-darwin
+          path: mac/x86_64
+
       - name: Build the app and DMG
         run: |
           # The app's version is the tag without its "v", or Cargo's for test builds.
@@ -104,16 +115,34 @@ jobs:
           if [[ -z "$version" ]]; then
             version="$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)"
           fi
-          scripts/macos_app.sh "$version" gui/arm64/clouddirstat-gui gui/x86_64/clouddirstat-gui \
+          scripts/macos_app.sh "$version" mac/arm64/clouddirstat-gui mac/x86_64/clouddirstat-gui \
             "dist/CloudDirStat-${TAG:-dev}-macos.dmg"
+
+      - name: Package the command line
+        run: |
+          name="clouddirstat-${TAG:-dev}-macos"
+          mkdir -p "dist/$name"
+          lipo -create -output "dist/$name/clouddirstat" \
+            mac/arm64/clouddirstat mac/x86_64/clouddirstat
+          # Artifacts lose the executable bit; joining the builds drops their signatures.
+          chmod 755 "dist/$name/clouddirstat"
+          codesign --force --sign - "dist/$name/clouddirstat"
+          echo "architectures: $(lipo -archs "dist/$name/clouddirstat")"
+          "dist/$name/clouddirstat" --version
+          cp README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          rm -rf "dist/$name"
+
       - uses: actions/upload-artifact@v7
         with:
-          name: release-macos-app
-          path: dist/*.dmg
+          name: release-macos
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
           if-no-files-found: error
 
   publish:
-    needs: [build, macos-app]
+    needs: [build, macos]
     if: github.event_name == 'release' || inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:

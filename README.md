@@ -44,7 +44,8 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 
 1. **Download** the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system:
    - **Mac:** `CloudDirStat-…-macos.dmg`. Open it and drag **CloudDirStat** to **Applications**. It runs natively on both Apple Silicon and Intel Macs.
-   - **Windows and Linux** (x64 or ARM64), or the Mac command line: the archive for your system. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
+   - **Mac command line** (optional): `clouddirstat-…-macos.tar.gz`, one `clouddirstat` program for both Mac types.
+   - **Windows and Linux** (x64 or ARM64): the archive for your system. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
 2. **Sign in** to your cloud with its own command-line tool. This is a one-time step; see [Connect to your cloud](#connect-to-your-cloud) for details and for key-based sign-in.
 
    | Cloud | Sign in once with |
@@ -64,7 +65,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 The programs are not code-signed with a developer certificate yet, so the first start needs one extra step:
 
 - **Mac app:** open CloudDirStat once; macOS says it can't verify the developer. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to CloudDirStat. (Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`.)
-- **Mac command line:** clear the download quarantine with `xattr -d com.apple.quarantine clouddirstat clouddirstat-gui`.
+- **Mac command line:** clear the download quarantine with `xattr -d com.apple.quarantine clouddirstat`.
 - **Windows:** SmartScreen may warn about an unrecognized app; choose **More info → Run anyway**.
 
 ## Locations
@@ -449,7 +450,7 @@ Versions come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and 
 
 ### Making a release
 
-Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds of the app into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac), and attaches everything. To rebuild the files of an existing release, run the workflow by hand from the Actions tab with that tag; with no tag it only builds, which is useful for testing.
+Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line, and attaches everything: two files for Mac, and one archive per Windows and Linux target. To rebuild the files of an existing release, run the workflow by hand from the Actions tab with that tag; with no tag it only builds, which is useful for testing.
 
 </details>
 

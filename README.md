@@ -78,7 +78,7 @@ Enter a location (and optionally a profile) and press **Scan**, or pass them on 
 
 - **Folder list:** every prefix and object, sorted by size, with its share of the parent folder and when it was last modified (for a folder, the newest object in it; for an incomplete upload, when it was started; dates are UTC). It fills in while the scan runs. Click the arrow or double-click a folder to expand it.
 - **Largest files:** the tab next to **Folders** lists the largest files (50 by default; change the number at the top), with size, cost, storage class, last modified date, and folder. When scanning all buckets it lists the largest files in each bucket, under headings you can collapse one by one or all at once. Click a file to select it; double-click to show it in the folder list.
-- **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list.
+- **Treemap:** appears when the scan finishes. Each rectangle is an object sized by bytes; shading shows which folder it belongs to. Hover to see the object and outline its folder; click to select it in the list. Double-click to zoom one folder level toward the pointer, right-click (or the mouse back button) to zoom out, or right-click a folder in the list and choose **Zoom treemap here**. The path above the treemap shows where you are; click any part of it to jump back.
 - **Color by:** the tabs on the right switch the treemap colors and legend between **Storage classes**, **Versions** (objects with old versions and deleted objects whose old versions are still billed, which need **Versions** checked, plus incomplete uploads, which are always found), **Prefixes** (the largest top-level folders; click one to select it in the folder list), and **File types** (grouped by extension, like WinDirStat).
 - **Filter:** click a row in the legend (a storage class, object state such as *Incomplete upload*, prefix, or file type) to show only those objects in the folder list, largest files, and treemap, with sizes and costs recalculated. A bar above the lists shows the active filter and its total; click the row again, press **Clear filter**, or press Esc to show everything.
 - **Status bar:** total estimated cost per month, incomplete uploads when there are any, scan time and LIST cost, and any warnings (hover for details).
@@ -243,14 +243,15 @@ Done:
 - [x] Incomplete multipart uploads
 - [x] Scan all buckets at once (`s3://`)
 - [x] Largest files list (per bucket when scanning all buckets)
+- [x] Filter the folder list, largest files, and treemap by storage class, object state, prefix, or file type
+- [x] Last modified column
+- [x] Click to zoom into a folder in the treemap
 - [x] Credentials: profiles, `aws login`, IAM Identity Center, access keys
 - [x] Low memory for large buckets (~66 bytes per object)
 - [x] Release builds for Windows, macOS, and Linux (x64 and ARM64)
 
 Next:
 
-- [ ] Click to zoom into a folder in the treemap
-- [ ] Last modified column
 - [ ] Instant bucket totals and scan-cost estimate from CloudWatch
 - [ ] macOS app bundle and code signing
 - [ ] Read S3 Inventory reports for billion-object buckets

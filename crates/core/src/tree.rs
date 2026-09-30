@@ -333,6 +333,19 @@ impl Tree {
         })
     }
 
+    /// The child of `ancestor` that `id` is in (or is), or `None` when `id` is not
+    /// below `ancestor`.
+    pub fn child_toward(&self, ancestor: NodeId, id: NodeId) -> Option<NodeId> {
+        let mut current = id;
+        while let Some(parent) = self.node(current).parent() {
+            if parent == ancestor {
+                return Some(current);
+            }
+            current = parent;
+        }
+        None
+    }
+
     pub fn path(&self, id: NodeId) -> String {
         let mut segments = Vec::new();
         let mut current = id;
@@ -852,6 +865,24 @@ mod tests {
             tree.usage_by_version_state(VersionState::IncompleteUpload),
             Usage::new(50, 2)
         );
+    }
+
+    #[test]
+    fn finds_the_child_toward_a_node() {
+        let mut tree = Tree::new();
+        tree.insert(&entry("a/b/c.txt", 1));
+        tree.insert(&entry("d.txt", 1));
+
+        let (a, b, c) = (
+            find(&tree, "a/"),
+            find(&tree, "a/b/"),
+            find(&tree, "a/b/c.txt"),
+        );
+        assert_eq!(tree.child_toward(Tree::ROOT, c), Some(a));
+        assert_eq!(tree.child_toward(a, c), Some(b));
+        assert_eq!(tree.child_toward(b, c), Some(c));
+        assert_eq!(tree.child_toward(c, c), None);
+        assert_eq!(tree.child_toward(a, find(&tree, "d.txt")), None);
     }
 
     #[test]

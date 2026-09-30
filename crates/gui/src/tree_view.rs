@@ -56,7 +56,7 @@ impl TreeView {
         root_label: &str,
         colors: &Colors,
         selected: &mut Option<NodeId>,
-    ) {
+    ) -> Option<NodeId> {
         if self.root != Some(root) {
             self.root = Some(root);
             self.expanded.insert(root);
@@ -98,6 +98,7 @@ impl TreeView {
         }
 
         let mut toggled = None;
+        let mut zoom = None;
         table
             .header(ROW_HEIGHT, |mut header| {
                 for title in [
@@ -153,8 +154,16 @@ impl TreeView {
                     if response.clicked() {
                         *selected = Some(row.id);
                     }
-                    if response.double_clicked() && node.kind() == NodeKind::Directory {
-                        toggled = Some(row.id);
+                    if node.kind() == NodeKind::Directory {
+                        if response.double_clicked() {
+                            toggled = Some(row.id);
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button("Zoom treemap here").clicked() {
+                                zoom = Some(row.id);
+                                ui.close();
+                            }
+                        });
                     }
                 });
             });
@@ -165,6 +174,7 @@ impl TreeView {
             }
             self.stale = true;
         }
+        zoom
     }
 
     /// Draws the expand/collapse arrow; returns whether it was clicked.

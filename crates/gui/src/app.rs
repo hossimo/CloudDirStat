@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    EntryKind, Filtered, NodeId, Subset, format_bytes, format_count, format_usd,
+    EntryKind, Filtered, NodeId, Subset, Tree, format_bytes, format_count, format_usd,
 };
 use clouddirstat_providers::s3::{S3Location, S3Pricing, ScanStats};
 use eframe::egui;
@@ -15,7 +15,7 @@ use crate::legend;
 use crate::palette::{ColorMode, Colors};
 use crate::scan::{Scan, ScanRequest, ScanState};
 use crate::tree_view::TreeView;
-use crate::treemap_view::TreemapView;
+use crate::treemap_view::{self, TreemapView};
 
 /// Time per frame spent moving scanned entries into the tree.
 const INSERT_BUDGET: Duration = Duration::from_millis(8);
@@ -51,6 +51,8 @@ struct View {
     /// The objects that pass `filter`, recomputed with the colors.
     subset: Option<Subset>,
     selected: Option<NodeId>,
+    /// The folder the treemap is zoomed into; `None` shows the whole scan.
+    zoom: Option<NodeId>,
     list: ListTab,
     tree_view: TreeView,
     largest: LargestFiles,
@@ -67,6 +69,7 @@ impl View {
             filter: None,
             subset: None,
             selected: None,
+            zoom: None,
             list: ListTab::Folders,
             tree_view: TreeView::default(),
             largest: LargestFiles::default(),
@@ -330,19 +333,37 @@ impl eframe::App for App {
                 // Always leave a few rows of the folder list visible.
                 .max_size(available * 0.8)
                 .show(ui, |ui| {
-                    if view.filter.is_some() && filtered.usage(root).objects == 0 {
+                    if let Some(zoom) =
+                        zoom_bar(ui, tree, root, &scan.location.to_string(), view.zoom)
+                    {
+                        view.zoom = zoom;
+                    }
+                    let map_root = view.zoom.unwrap_or(root);
+                    if view.filter.is_some() && filtered.usage(map_root).objects == 0 {
                         ui.centered_and_justified(|ui| {
-                            ui.weak(if filter_pending {
-                                "Filtering…"
-                            } else {
-                                "Nothing matches the filter"
+                            ui.weak(match (filter_pending, view.zoom) {
+                                (true, _) => "Filtering…",
+                                (false, None) => "Nothing matches the filter",
+                                (false, Some(_)) => "Nothing in this folder matches the filter",
                             })
                         });
-                    } else if let Some(clicked) =
-                        view.treemap.show(ui, filtered, root, colors, view.selected)
+                        return;
+                    }
+                    match view
+                        .treemap
+                        .show(ui, filtered, map_root, colors, view.selected)
                     {
-                        view.selected = Some(clicked);
-                        view.tree_view.reveal(tree, clicked);
+                        Some(treemap_view::Action::Select(clicked)) => {
+                            view.selected = Some(clicked);
+                            view.tree_view.reveal(tree, clicked);
+                        }
+                        Some(treemap_view::Action::ZoomIn(folder)) => view.zoom = Some(folder),
+                        Some(treemap_view::Action::ZoomOut) => {
+                            view.zoom = view.zoom.and_then(|zoom| {
+                                tree.node(zoom).parent().filter(|&parent| parent != root)
+                            });
+                        }
+                        None => {}
                     }
                 });
         }
@@ -380,14 +401,19 @@ impl eframe::App for App {
                 ui.selectable_value(&mut view.list, ListTab::LargestFiles, "Largest files");
             });
             match view.list {
-                ListTab::Folders => view.tree_view.show(
-                    ui,
-                    filtered,
-                    root,
-                    &scan.location.to_string(),
-                    colors,
-                    &mut view.selected,
-                ),
+                ListTab::Folders => {
+                    let zoom = view.tree_view.show(
+                        ui,
+                        filtered,
+                        root,
+                        &scan.location.to_string(),
+                        colors,
+                        &mut view.selected,
+                    );
+                    if let Some(folder) = zoom {
+                        view.zoom = (folder != root).then_some(folder);
+                    }
+                }
                 ListTab::LargestFiles => {
                     let per_bucket = scan.location.is_all_buckets();
                     let action =
@@ -420,6 +446,55 @@ impl eframe::App for App {
             view.refreshed_at = None;
         }
     }
+}
+
+/// The folders from the scan root down to where the treemap is zoomed, each a link
+/// back to that level. Returns the zoom to switch to, if one was clicked.
+fn zoom_bar(
+    ui: &mut egui::Ui,
+    tree: &Tree,
+    root: NodeId,
+    root_label: &str,
+    zoom: Option<NodeId>,
+) -> Option<Option<NodeId>> {
+    let mut path = Vec::new();
+    let mut current = zoom;
+    while let Some(folder) = current.filter(|&folder| folder != root) {
+        path.push(folder);
+        current = tree.node(folder).parent();
+    }
+    path.reverse();
+
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        if path.is_empty() {
+            ui.strong(root_label);
+        } else if ui.link(root_label).clicked() {
+            clicked = Some(None);
+        }
+        for (index, &folder) in path.iter().enumerate() {
+            let name = format!("{}/", tree.name(folder));
+            if index + 1 == path.len() {
+                ui.strong(name);
+            } else if ui.link(name).clicked() {
+                clicked = Some(Some(folder));
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if zoom.is_some() && ui.button("Zoom out").clicked() {
+                let parent = path.len().checked_sub(2).map(|index| path[index]);
+                clicked = Some(parent);
+            }
+            ui.weak(if zoom.is_some() {
+                "Double-click to zoom in, right-click to zoom out"
+            } else {
+                "Double-click to zoom in"
+            });
+        });
+    });
+    clicked
 }
 
 /// Shows which filter is on and what passes it. Returns whether Clear was clicked.

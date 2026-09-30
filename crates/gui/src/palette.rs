@@ -137,14 +137,9 @@ impl Colors {
     }
 
     fn prefix_of(&self, tree: &Tree, id: NodeId) -> Color32 {
-        let mut current = id;
-        while let Some(parent) = tree.node(current).parent() {
-            if parent == self.root {
-                return self.prefix(current).unwrap_or(NEUTRAL);
-            }
-            current = parent;
-        }
-        NEUTRAL
+        tree.child_toward(self.root, id)
+            .and_then(|prefix| self.prefix(prefix))
+            .unwrap_or(NEUTRAL)
     }
 }
 

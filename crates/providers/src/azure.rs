@@ -531,6 +531,19 @@ fn check(
         403 if error.starts_with("AuthenticationFailed") => Err(Error::Credentials(format!(
             "Azure rejected the credentials ({error}). Check the account key or SAS token."
         ))),
+        // Only Azure CLI tokens get a 401. A token Azure understands but won't take here
+        // is usually from another tenant than the storage account's.
+        401 if error.starts_with("InvalidAuthenticationInfo") => {
+            let tenant = response
+                .header("www-authenticate")
+                .and_then(tenant_of_challenge)
+                .unwrap_or("TENANT_ID");
+            Err(Error::Credentials(format!(
+                "Azure rejected the Azure CLI's sign-in ({error}). The storage account is \
+                 probably in a different Azure tenant than the one `az login` signed in to: run \
+                 `az login --tenant {tenant}`, or use a SAS token or account key."
+            )))
+        }
         401 => Err(Error::Credentials(format!(
             "Azure rejected the credentials ({error}). Run `az login` to sign in again, or check \
              the SAS token or account key.",
@@ -542,6 +555,22 @@ fn check(
             message: error,
         }),
     }
+}
+
+/// The tenant a 401's `WWW-Authenticate` challenge asks for:
+/// `Bearer authorization_uri=https://login.microsoftonline.com/TENANT/oauth2/authorize ...`.
+fn tenant_of_challenge(challenge: &str) -> Option<&str> {
+    let uri = challenge
+        .split([' ', ','])
+        .find_map(|part| part.strip_prefix("authorization_uri="))?
+        .trim_matches('"');
+    let path = uri.split_once("://")?.1.split_once('/')?.1;
+    let tenant = path.split('/').next()?;
+    let valid = !tenant.is_empty()
+        && tenant
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'));
+    valid.then_some(tenant)
 }
 
 /// A container name as a URL path segment. `$` (in `$web`, `$logs`, `$root`) is legal in
@@ -745,6 +774,18 @@ mod tests {
         assert!(page.blobs[1].version && !page.blobs[1].current_version);
         assert_eq!(page.blobs[2].name, "odd\u{1}name");
         assert!(page.blobs[2].deleted);
+    }
+
+    #[test]
+    fn finds_the_tenant_in_a_bearer_challenge() {
+        let challenge = "Bearer authorization_uri=https://login.microsoftonline.com/\
+                         00000000-1111-2222-3333-444444444444/oauth2/authorize \
+                         resource_id=https://storage.azure.com";
+        assert_eq!(
+            tenant_of_challenge(challenge),
+            Some("00000000-1111-2222-3333-444444444444")
+        );
+        assert_eq!(tenant_of_challenge("Bearer realm=\"x\""), None);
     }
 
     #[test]

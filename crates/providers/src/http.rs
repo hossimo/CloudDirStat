@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use http::{Method, Request, StatusCode};
+use http::{HeaderMap, Method, Request, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnector;
@@ -26,12 +26,18 @@ pub(crate) struct Http {
 
 pub(crate) struct Response {
     pub status: StatusCode,
+    pub headers: HeaderMap,
     pub body: Bytes,
 }
 
 impl Response {
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    /// A header's value, when present and plain text.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name)?.to_str().ok()
     }
 }
 
@@ -111,14 +117,17 @@ impl Http {
             .request(request)
             .await
             .map_err(|error| Error::Network(format!("could not reach {host}: {error}")))?;
-        let status = response.status();
-        let body = response
-            .into_body()
+        let (parts, body) = response.into_parts();
+        let body = body
             .collect()
             .await
             .map_err(|error| Error::Network(format!("connection to {host} failed: {error}")))?
             .to_bytes();
-        Ok(Response { status, body })
+        Ok(Response {
+            status: parts.status,
+            headers: parts.headers,
+            body,
+        })
     }
 }
 

@@ -141,7 +141,7 @@ impl CredentialsForm {
         let mut entered = false;
         match provider {
             Provider::S3 if self.aws_mode == AwsMode::AccessKey => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Access key ID");
                     entered |= submitted(
                         ui,

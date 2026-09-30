@@ -227,7 +227,8 @@ impl App {
         let mut submitted = false;
         let mut scan_clicked = false;
         let mut estimate_clicked = false;
-        ui.horizontal(|ui| {
+        // Wraps onto a second line in a narrow window instead of running off the edge.
+        ui.horizontal_wrapped(|ui| {
             ui.label("Location");
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location_input)
@@ -322,9 +323,10 @@ impl App {
                 ui.separator();
             }
             match &scan.state {
+                // The summary comes last and is cut off to fit, so the progress bar
+                // and warnings stay visible in a narrow window.
                 ScanState::Running => {
                     ui.spinner();
-                    ui.label(format!("Scanning {summary}  ({elapsed:.0}s)"));
                     if let Some(expected) = scan.expected_objects {
                         let fraction = total.objects as f32 / expected as f32;
                         ui.add(
@@ -338,19 +340,25 @@ impl App {
                             format_count(expected)
                         ));
                     }
+                    fitted(ui, format!("Scanning {summary}  ({elapsed:.0}s)"));
                 }
                 ScanState::Finished { stats, .. } => {
-                    ui.label(format!(
-                        "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests (~${:.4})",
-                        format_count(stats.list_requests),
-                        stats.estimated_cost_usd()
-                    ));
                     warnings(ui, stats);
+                    fitted(
+                        ui,
+                        format!(
+                            "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests \
+                             (~${:.4})",
+                            format_count(stats.list_requests),
+                            stats.estimated_cost_usd()
+                        ),
+                    );
                 }
                 ScanState::Stopped { .. } => {
-                    ui.label(format!(
-                        "{summary}  ·  stopped after {elapsed:.1}s (partial)"
-                    ));
+                    fitted(
+                        ui,
+                        format!("{summary}  ·  stopped after {elapsed:.1}s (partial)"),
+                    );
                 }
                 ScanState::Failed(error) => {
                     error_view::chip(ui, error);
@@ -627,6 +635,11 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
             .inner
         })
         .inner
+}
+
+/// A label cut off with "…" to fit the space left; hovering shows all of it.
+fn fitted(ui: &mut egui::Ui, text: String) {
+    ui.add(egui::Label::new(text).truncate());
 }
 
 /// Skipped buckets and checks that could not run, with the details on hover.

@@ -9,6 +9,7 @@ use eframe::egui;
 use tokio::runtime::Runtime;
 
 use crate::credentials_form::CredentialsForm;
+use crate::error_view;
 use crate::estimate_view::{self, EstimateTask};
 use crate::filter::Filter;
 use crate::help::HelpWindow;
@@ -280,7 +281,7 @@ impl App {
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if let Some(error) = &self.input_error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                error_view::chip(ui, error);
                 return;
             }
             let Some(scan) = &self.scan else {
@@ -352,7 +353,7 @@ impl App {
                     ));
                 }
                 ScanState::Failed(error) => {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    error_view::chip(ui, error);
                 }
             }
         });
@@ -388,6 +389,19 @@ impl eframe::App for App {
             });
             return;
         };
+        // A scan that failed before finding anything has nothing to show but the error,
+        // which gets the room the lists would have used.
+        if let ScanState::Failed(error) = &scan.state
+            && scan.tree.total().objects == 0
+        {
+            let action = egui::CentralPanel::default()
+                .show(ui, |ui| error_view::card(ui, "Scan failed", error))
+                .inner;
+            if let Some(error_view::Action::Help) = action {
+                self.help.open();
+            }
+            return;
+        }
         let view = &mut self.view;
         let Some(colors) = &view.colors else {
             return;

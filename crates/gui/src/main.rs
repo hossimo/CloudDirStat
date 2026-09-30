@@ -5,6 +5,7 @@ mod credentials_form;
 mod cushion;
 #[cfg(feature = "demo")]
 mod demo_scan;
+mod error_view;
 mod estimate_view;
 mod filter;
 mod help;

@@ -22,6 +22,10 @@ impl HelpWindow {
         self.open = !self.open;
     }
 
+    pub fn open(&mut self) {
+        self.open = true;
+    }
+
     /// `bucket` fills in the policy when the location field holds one (`*` for all).
     pub fn show(&mut self, ctx: &egui::Context, bucket: Option<&str>) {
         if !self.open {

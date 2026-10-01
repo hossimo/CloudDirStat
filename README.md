@@ -1,8 +1,9 @@
-<img src="icons/png/icon-128.png" alt="CloudDirStat icon" width="96" align="right">
+<img src="icons/png/icon-128.png" alt="CloudDirStat icon" width="96" align="right"> 
 
 # CloudDirStat
 
 [![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/hossimo/CloudDirStat/total)
 
 **CloudDirStat is like the amazing [WinDirStat](https://windirstat.net/) (not affiliated) for cloud storage.** See what is using the space, and the money, in your Amazon S3, Google Cloud Storage, and Azure Blob Storage buckets.
 

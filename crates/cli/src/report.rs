@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use clouddirstat_core::Pricing;
 use clouddirstat_core::{
-    EntryKind, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_counted,
-    format_usd,
+    EntryKind, NodeId, NodeKind, Tree, Usage, escape_control, format_bytes, format_count,
+    format_counted, format_usd,
 };
 use clouddirstat_providers::{Location, ScanStats};
 
@@ -67,7 +67,7 @@ impl Report<'_> {
     fn print_storage_classes(&self) {
         section("By storage class");
         for (class, usage) in self.tree.storage_classes() {
-            self.print_usage_row(class, usage);
+            self.print_usage_row(&escape_control(class), usage);
         }
     }
 
@@ -148,7 +148,7 @@ impl Report<'_> {
         section("Largest objects per bucket");
         for bucket in self.tree.children_by_size(Tree::ROOT) {
             if self.tree.node(bucket).kind() == NodeKind::Directory {
-                println!("  {}", self.tree.name(bucket));
+                println!("  {}", escape_control(self.tree.name(bucket)));
                 self.print_objects(self.tree.largest_objects_in(bucket, self.options.top));
             }
         }
@@ -161,7 +161,7 @@ impl Report<'_> {
                 "  {:>10} {:>12}/mo  {}",
                 format_bytes(usage.bytes),
                 format_usd(usage.monthly_cost),
-                self.tree.path(id)
+                escape_control(&self.tree.path(id))
             );
         }
     }
@@ -171,12 +171,12 @@ impl Report<'_> {
             return "/".to_owned();
         }
         let name = match self.tree.name(id) {
-            "" => "(empty)",
-            name => name,
+            "" => "(empty)".into(),
+            name => escape_control(name),
         };
         match self.tree.node(id).kind() {
             NodeKind::Directory => format!("{name}/"),
-            NodeKind::Object => name.to_owned(),
+            NodeKind::Object => name.into_owned(),
         }
     }
 

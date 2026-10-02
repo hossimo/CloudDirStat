@@ -2,12 +2,13 @@ mod estimate;
 mod report;
 
 use std::io::Write;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use clouddirstat_core::{Tree, format_count, format_counted};
+use clouddirstat_core::{Tree, escape_control, format_count, format_counted};
 use clouddirstat_providers::azure::AzureCredentials;
 use clouddirstat_providers::gcs::GcsCredentials;
 use clouddirstat_providers::s3::CredentialSource;
@@ -107,7 +108,18 @@ struct ScanArgs {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            // Errors can quote the provider's own messages, so they are escaped like names.
+            eprintln!("Error: {}", escape_lines(&format!("{error:?}")));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     // Secrets such as AZURE_STORAGE_KEY can live in a .env file; a missing file is fine.
     let _ = dotenvy::dotenv();
     match Cli::parse().command {
@@ -115,10 +127,10 @@ async fn main() -> Result<()> {
         Command::Estimate(args) => {
             let estimate = args.connect().await?.estimate().await?;
             for skipped in &estimate.skipped {
-                eprintln!(
-                    "warning: skipped bucket {}: {}",
+                warn(&format!(
+                    "skipped bucket {}: {}",
                     skipped.bucket, skipped.reason
-                );
+                ));
             }
             estimate::print(&args.location, &estimate);
             Ok(())
@@ -186,13 +198,13 @@ async fn scan(args: ScanArgs) -> Result<()> {
         eprint!("\r\x1b[2K");
     }
     for skipped in &stats.skipped_buckets {
-        eprintln!(
-            "warning: skipped bucket {}: {}",
+        warn(&format!(
+            "skipped bucket {}: {}",
             skipped.bucket, skipped.reason
-        );
+        ));
     }
     for warning in &stats.warnings {
-        eprintln!("warning: {warning}");
+        warn(warning);
     }
 
     Report {
@@ -209,6 +221,18 @@ async fn scan(args: ScanArgs) -> Result<()> {
     }
     .print();
     Ok(())
+}
+
+fn warn(message: &str) {
+    eprintln!("warning: {}", escape_control(message));
+}
+
+/// `text` escaped line by line, keeping its line breaks.
+fn escape_lines(text: &str) -> String {
+    text.lines().map(escape_control).collect::<Vec<_>>().join(
+        "
+",
+    )
 }
 
 /// Share of the expected objects scanned so far. CloudWatch's count is a day old and

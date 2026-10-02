@@ -229,10 +229,10 @@ fn warn(message: &str) {
 
 /// `text` escaped line by line, keeping its line breaks.
 fn escape_lines(text: &str) -> String {
-    text.lines().map(escape_control).collect::<Vec<_>>().join(
-        "
-",
-    )
+    text.lines()
+        .map(escape_control)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Share of the expected objects scanned so far. CloudWatch's count is a day old and

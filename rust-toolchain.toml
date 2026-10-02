@@ -1,0 +1,3 @@
+# The Rust version for CI, releases, and local builds. CI reads it from here.
+[toolchain]
+channel = "1.98.1"

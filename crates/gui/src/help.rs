@@ -182,7 +182,9 @@ fn azure(ui: &mut egui::Ui) {
         });
     ui.weak(
         "Owner or Contributor of the subscription does not include reading blobs: add \
-         Storage Blob Data Reader too. Without Reader, prices are eastus LRS rates. \
+         Storage Blob Data Reader too. Without Reader, prices are eastus LRS rates. A SAS \
+         token or account key is used only for its own account, without the Azure CLI: \
+         prices use eastus rates at the account's redundancy. \
          Versions adds blob versions, snapshots, and soft-deleted blobs.",
     );
 }

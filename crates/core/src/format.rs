@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::Cost;
 
 const UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
@@ -45,9 +47,52 @@ pub fn format_usd(cost: Cost) -> String {
     format!("${}.{:02}", format_count(cents / 100), cents % 100)
 }
 
+/// `text` with control characters and bidirectional formatting characters escaped
+/// (`\u{1b}`, `\n`, `\u{202e}`), so that object names, which anyone who can write to a
+/// bucket chooses, can't send escape sequences to a terminal or reorder what it shows.
+pub fn escape_control(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(needs_escape) {
+        return Cow::Borrowed(text);
+    }
+    let mut escaped = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if needs_escape(c) {
+            escaped.extend(c.escape_default());
+        } else {
+            escaped.push(c);
+        }
+    }
+    Cow::Owned(escaped)
+}
+
+fn needs_escape(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escapes_control_characters() {
+        assert_eq!(escape_control("logs/app.log"), "logs/app.log");
+        assert!(matches!(escape_control("ünïcödé 名前"), Cow::Borrowed(_)));
+        assert_eq!(escape_control("a\x1b[31mred"), "a\\u{1b}[31mred");
+        assert_eq!(
+            escape_control("\x1b]8;;http://x\x07link"),
+            "\\u{1b}]8;;http://x\\u{7}link"
+        );
+        assert_eq!(escape_control("two\nlines\r"), "two\\nlines\\r");
+        assert_eq!(escape_control("del\x7f c1\u{9b}"), "del\\u{7f} c1\\u{9b}");
+        assert_eq!(
+            escape_control("evil\u{202e}txt.exe"),
+            "evil\\u{202e}txt.exe"
+        );
+    }
 
     #[test]
     fn counts_nouns() {

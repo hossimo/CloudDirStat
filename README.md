@@ -64,13 +64,23 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 
 The programs are not code-signed with a developer certificate yet. On Windows, SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway**. For the Mac, see below.
 
+### Checking a download
+
+Every release file comes with a signed record from GitHub that it was built by this repository's release workflow. To check one, use the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify clouddirstat-v1.2.3-x86_64-pc-windows-msvc.zip --repo hossimo/CloudDirStat
+```
+
+If you'd rather not run unsigned programs at all, [build from source](#building-from-source).
+
 ### On a Mac
 
 **Opening the app the first time.** Until CloudDirStat is signed by a registered Apple developer, macOS blocks it the first time you open it and says it can't verify the developer. You only need to allow it once:
 
 - **macOS 15 Sequoia and later:** double-click **CloudDirStat** in Applications and close the warning (**Done**). Then open **System Settings → Privacy & Security**, scroll down to the message about CloudDirStat, click **Open Anyway**, and confirm. (Apple removed the right-click shortcut below in macOS 15.)
 - **macOS 14 Sonoma and earlier:** in Applications, right-click (or Control-click) **CloudDirStat**, choose **Open**, then click **Open** again in the dialog.
-- **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`
+- **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`. This removes the "downloaded from the internet" mark that makes macOS check the app before opening it, so only do it for a download you trust (see [Checking a download](#checking-a-download)).
 
 **The command line is a separate download.** The DMG contains only the app. To use the `clouddirstat` command in Terminal, also download `clouddirstat-…-macos.tar.gz` (one program for both Apple Silicon and Intel Macs) and install it:
 
@@ -407,8 +417,10 @@ Remove the leading spaces (`region = us-east-1`). Indentation is only valid for 
 2. Build:
 
    ```sh
-   cargo build --release
+   cargo build --release --locked
    ```
+
+   `--locked` uses exactly the dependency versions in `Cargo.lock`, the ones the releases are built with. `rust-toolchain.toml` picks the Rust version; rustup installs it the first time.
 
    The programs are `target/release/clouddirstat` and `target/release/clouddirstat-gui` (with `.exe` on Windows).
 
@@ -466,7 +478,7 @@ Versions come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and 
 
 ### Making a release
 
-Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line, and attaches everything: two files for Mac, and one archive per Windows and Linux target. To rebuild the files of an existing release, run the workflow by hand from the Actions tab with that tag; with no tag it only builds, which is useful for testing.
+Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line, and attaches everything: two files for Mac, and one archive per Windows and Linux target. It also records a build provenance attestation for every file (see [Checking a download](#checking-a-download)). A release's files can't be replaced by publishing again; to rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
 
 </details>
 

@@ -11,7 +11,7 @@ use clouddirstat_core::{Tree, format_count, format_counted};
 use clouddirstat_providers::azure::AzureCredentials;
 use clouddirstat_providers::gcs::GcsCredentials;
 use clouddirstat_providers::s3::CredentialSource;
-use clouddirstat_providers::{Credentials, Location, ScanOptions, Scanner};
+use clouddirstat_providers::{Credentials, Location, ScanOptions, Scanner, load_dotenv};
 use tokio::sync::mpsc;
 
 use crate::report::{Report, ReportOptions};
@@ -106,10 +106,20 @@ struct ScanArgs {
     concurrency: usize,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Secrets such as AZURE_STORAGE_KEY can live in a .env file; a missing file is fine.
-    let _ = dotenvy::dotenv();
+fn main() -> Result<()> {
+    // Sign-in variables such as AZURE_STORAGE_KEY can live in a .env file.
+    // SAFETY: no other thread has started yet; the tokio runtime is built below.
+    let ignored = unsafe { load_dotenv() };
+    if !ignored.is_empty() {
+        eprintln!(
+            "warning: ignored {} from .env; it may only set sign-in variables, see the README",
+            ignored.join(", ")
+        );
+    }
+    tokio::runtime::Runtime::new()?.block_on(run())
+}
+
+async fn run() -> Result<()> {
     match Cli::parse().command {
         Command::Scan(args) => scan(args).await,
         Command::Estimate(args) => {

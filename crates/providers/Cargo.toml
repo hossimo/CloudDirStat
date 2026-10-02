@@ -11,6 +11,7 @@ aws-sdk-s3 = "1.150.0"
 aws-lc-rs = "1.18.1"
 base64 = "0.23.1"
 clouddirstat-core = { path = "../core" }
+dotenvy = "0.15"
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }

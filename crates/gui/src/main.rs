@@ -22,7 +22,7 @@ use clap::Parser;
 use clouddirstat_providers::azure::AzureCredentials;
 use clouddirstat_providers::gcs::GcsCredentials;
 use clouddirstat_providers::s3::CredentialSource;
-use clouddirstat_providers::{Credentials, Location};
+use clouddirstat_providers::{Credentials, Location, load_dotenv};
 use eframe::egui;
 
 use crate::app::App;
@@ -51,8 +51,10 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
-    // Secrets such as AZURE_STORAGE_KEY can live in a .env file; a missing file is fine.
-    let _ = dotenvy::dotenv();
+    // Sign-in variables such as AZURE_STORAGE_KEY can live in a .env file. A release
+    // build has no console, so variables the file may not set are ignored silently.
+    // SAFETY: no other thread has started yet; the tokio runtime is built below.
+    let _ = unsafe { load_dotenv() };
     let cli = Cli::parse();
     let runtime = tokio::runtime::Runtime::new()?;
     let initial_scan = cli.location.map(|location| ScanRequest {

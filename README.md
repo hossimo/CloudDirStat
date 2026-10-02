@@ -263,6 +263,14 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;A
 GOOGLE_OAUTH_ACCESS_TOKEN=ya29....
 ```
 
+Only the folder you start from is checked, not the folders above it. A `.env` file can only set these sign-in variables; any others in it are ignored (the command line says which), because settings such as `AWS_ENDPOINT_URL` or `GOOGLE_APPLICATION_CREDENTIALS` could send your requests or credentials elsewhere. Set those in your real environment if you need them.
+
+| Cloud | Variables |
+|---|---|
+| AWS | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_REGION` |
+| Google Cloud | `GOOGLE_OAUTH_ACCESS_TOKEN`, `GOOGLE_CLOUD_PROJECT`, `CLOUDSDK_CORE_PROJECT` |
+| Azure | `AZURE_STORAGE_KEY`, `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_SAS_TOKEN` |
+
 A `.env` file holds secrets: keep it private, and never commit it to version control.
 
 ## Using the app

@@ -249,10 +249,13 @@ impl AzureScanner {
     }
 
     /// The account's region and redundancy. Finding them is optional: without them the
-    /// scan uses eastus LRS prices, with a warning. They come from Azure Resource
-    /// Manager through the Azure CLI, which is tried even when blobs are listed with a
-    /// SAS token or account key.
+    /// scan uses eastus LRS prices, with a warning. With the Azure CLI they come from
+    /// Azure Resource Manager. A SAS token or account key never reaches beyond the
+    /// account, so only its redundancy is found, from the Blob service.
     async fn placement(&mut self, account: &str) -> AccountPlacement {
+        if !self.auth.uses_cli() {
+            return self.blob_service_placement(account).await;
+        }
         match self.resource_manager_accounts().await {
             Ok(accounts) => match accounts.into_iter().find(|found| found.name == account) {
                 Some(found) => found.placement,
@@ -264,14 +267,6 @@ impl AzureScanner {
                     AccountPlacement::default()
                 }
             },
-            Err(_) if !self.auth.uses_cli() => {
-                self.warnings.push(format!(
-                    "{account}: region unknown with {} (sign in with `az login` to look it \
-                     up), so priced at eastus LRS rates",
-                    self.auth.describe()
-                ));
-                AccountPlacement::default()
-            }
             Err(error) => {
                 self.warnings.push(format!(
                     "{account}: region unknown, so priced at eastus LRS rates. {error}"
@@ -279,6 +274,41 @@ impl AzureScanner {
                 AccountPlacement::default()
             }
         }
+    }
+
+    /// The account's redundancy from Get Account Information, a metadata read that a SAS
+    /// or account key allows. The region stays unknown, so it is priced as eastus.
+    async fn blob_service_placement(&mut self, account: &str) -> AccountPlacement {
+        let url = format!(
+            "https://{account}.blob.core.windows.net/{}?restype=account&comp=properties",
+            encode(&self.location.container)
+        );
+        let sku = match self.auth.get(&self.http, &url, API_VERSION).await {
+            Ok(response) => {
+                self.setup_requests += 1;
+                response
+                    .header("x-ms-sku-name")
+                    .filter(|_| response.status.is_success())
+                    .map(str::to_owned)
+            }
+            Err(_) => None,
+        };
+        let unknown = if sku.is_some() {
+            "region"
+        } else {
+            "region and redundancy"
+        };
+        let placement = AccountPlacement {
+            region: String::new(),
+            sku: sku.unwrap_or_default(),
+        };
+        self.warnings.push(format!(
+            "{account}: {unknown} unknown with {} (only found with `az login`), so priced at \
+             {} rates",
+            self.auth.describe(),
+            placement.label()
+        ));
+        placement
     }
 
     /// Every storage account in every subscription the user can read (needs the Reader

@@ -20,7 +20,8 @@ pub struct RedundancyPrices {
     pub list_per_10k: Option<f64>,
 }
 
-/// Where a storage account keeps its data, as Azure Resource Manager reports it.
+/// Where a storage account keeps its data, as Azure Resource Manager reports it. Either
+/// part may be unknown (empty): the region then counts as eastus, the SKU as LRS.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountPlacement {
     /// `eastus`, `westeurope`, ...
@@ -42,19 +43,23 @@ impl AccountPlacement {
         }
     }
 
-    fn prices(&self) -> Option<&'static RedundancyPrices> {
-        let redundancy = self.redundancy();
-        PRICES
-            .iter()
-            .find(|prices| prices.region == self.region && prices.redundancy == redundancy)
+    fn region(&self) -> &str {
+        if self.region.is_empty() {
+            FALLBACK_REGION
+        } else {
+            &self.region
+        }
     }
 
-    fn label(&self) -> String {
-        if self.region.is_empty() {
-            format!("{FALLBACK_REGION} {FALLBACK_REDUNDANCY}")
-        } else {
-            format!("{} {}", self.region, self.redundancy())
-        }
+    fn prices(&self) -> Option<&'static RedundancyPrices> {
+        let (region, redundancy) = (self.region(), self.redundancy());
+        PRICES
+            .iter()
+            .find(|prices| prices.region == region && prices.redundancy == redundancy)
+    }
+
+    pub(super) fn label(&self) -> String {
+        format!("{} {}", self.region(), self.redundancy())
     }
 }
 
@@ -195,6 +200,15 @@ mod tests {
         assert!(cost(&lrs, "a", "Cold") < cost(&lrs, "a", "Cool"));
         assert!(cost(&lrs, "a", "Cool") < cost(&lrs, "a", "Hot"));
         assert!(lrs.source().starts_with("eastus LRS"));
+    }
+
+    #[test]
+    fn unknown_region_keeps_the_known_redundancy() {
+        let ragrs = AzurePricing::for_account(&placement("", "Standard_RAGRS"));
+        let unknown = AzurePricing::for_account(&placement("", ""));
+        assert!(ragrs.source().starts_with("eastus RA-GRS"));
+        assert!(unknown.source().starts_with("eastus LRS"));
+        assert!(cost(&unknown, "a", "Hot") < cost(&ragrs, "a", "Hot"));
     }
 
     #[test]

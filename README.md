@@ -26,7 +26,7 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 ## Safe by design
 
 - **Read-only.** CloudDirStat never adds, changes, or deletes anything in your buckets, and never reads the contents of your files. It only lists them.
-- **Least privilege.** A scan needs nothing more than permission to list. Optional permissions add features; when one is missing, that feature is skipped with a warning.
+- **Least privilege.** A scan needs nothing more than permission to list. Optional permissions add features; when one is missing, that feature is skipped with a warning. One to know about: when you sign in to Azure with the Azure CLI, CloudDirStat also reads the list of storage accounts in your subscriptions (if you have the Reader role) to find each account's region for prices. A SAS token or account key is only ever used for its own account.
 - **Your keys stay yours.** Keys and tokens typed into the app are kept in memory only: never saved to disk, logged, or sent anywhere but the provider. There is no telemetry.
 
 ## Features
@@ -252,7 +252,7 @@ A key covers one account, so enter it in the location. A connection string names
 | Storage Blob Data Reader | **Always** with the Azure CLI | Listing containers and blobs |
 | Reader (on the subscription or account) | Optional; needed for `az://` | Finding storage accounts, and each account's region and redundancy for prices |
 
-The region lookup always goes through the Azure CLI, even when blobs are listed with a key or SAS. Without it, costs use eastus LRS prices, with a warning.
+Only the Azure CLI can look up an account's region, through Azure Resource Manager. With the Azure CLI, CloudDirStat lists the storage accounts in your subscriptions to find it; without the Reader role, costs use eastus LRS prices, with a warning. A SAS token or account key is used only for its own account: CloudDirStat never runs the Azure CLI with one. It asks the Blob service for the account's redundancy (Get Account Information) and prices at eastus rates for that redundancy, with a warning.
 
 ### Keeping keys in a `.env` file
 

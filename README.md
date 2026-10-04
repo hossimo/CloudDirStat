@@ -1,4 +1,4 @@
-<img src="icons/png/icon-128.png" alt="CloudDirStat icon" width="96" align="right"> 
+<img src="icons/png/icon-128.png" alt="CloudDirStat icon" width="96" align="right">
 
 # CloudDirStat
 
@@ -13,21 +13,15 @@ CloudDirStat lists a bucket (or all of them), rebuilds the folder tree from the 
 
 *A scan of made-up demo buckets.*
 
-## Status
-
 | Provider | Status |
 |---|---|
 | **Amazon S3** | **Well tested** on real buckets. |
 | **Google Cloud Storage** | **New; needs more testing.** Works with Google login, service accounts, and access tokens, but has only been tested on a small test bucket. |
 | **Azure Blob Storage** | **New; needs more testing.** Works with the Azure CLI, SAS tokens, and account keys, but has only been tested on a small test account. |
 
-The project is in early development. If a Google or Azure scan fails or shows wrong numbers, please [open an issue](https://github.com/hossimo/CloudDirStat/issues). This is a side project made possible with Claude. It's been something that I needed for years but until now I could not make a reality. 
+The project is in early development. If a scan fails or shows wrong numbers, please [open an issue](https://github.com/hossimo/CloudDirStat/issues).
 
-## Safe by design
-
-- **Read-only.** CloudDirStat never adds, changes, or deletes anything in your buckets, and never reads the contents of your files. It only lists them.
-- **Least privilege.** A scan needs nothing more than permission to list. Optional permissions add features; when one is missing, that feature is skipped with a warning. One to know about: when you sign in to Azure with the Azure CLI, CloudDirStat also reads the list of storage accounts in your subscriptions (if you have the Reader role) to find each account's region for prices. A SAS token or account key is only ever used for its own account.
-- **Your keys stay yours.** Keys and tokens typed into the app are kept in memory only: never saved to disk, logged, or sent anywhere but the provider. There is no telemetry.
+**Contents:** [Features](#features) · [Install](#install) · [Quick start](#quick-start) · [Sign in and permissions](#sign-in-and-permissions) · [Using the app](#using-the-app) · [Command line](#using-the-command-line) · [Costs](#costs) · [Troubleshooting](#troubleshooting) · [Roadmap](#roadmap) · [About](#about) · [Contributing](CONTRIBUTING.md)
 
 ## Features
 
@@ -39,40 +33,30 @@ The project is in early development. If a Google or Azure scan fails or shows wr
 - **Every bucket at once:** `s3://`, `gs://`, or `az://` scans them all into one tree.
 - **Scan cost up front:** reports what the listing itself cost; for S3, **Estimate** shows sizes and costs in seconds without listing anything.
 - **Small and fast:** one native app per platform, no runtime or browser. Lists in parallel and uses about 66 bytes of memory per object (roughly 650 MB for 10 million objects).
-- **Written in Rust:** this one is only possible for me due to using AI to build the project. I'm still learning Rust and it normally not a language I would reach for but I wanted to make this future proof and as safe as I could.
 
-## Quick start
+### Safe by design
 
-1. **Download** the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system:
-   - **Mac:** `CloudDirStat-…-macos.dmg`. Open it and drag **CloudDirStat** to **Applications**. It runs natively on both Apple Silicon and Intel Macs. The first start needs one extra step, and the command line is a separate download: see [On a Mac](#on-a-mac).
-   - **Windows and Linux** (x64 or ARM64): the archive for your system. It contains two programs: `clouddirstat-gui` (the app) and `clouddirstat` (the command line).
-2. **Sign in** to your cloud with its own command-line tool. This is a one-time step; see [Connect to your cloud](#connect-to-your-cloud) for details and for key-based sign-in.
+- **Read-only.** CloudDirStat never adds, changes, or deletes anything in your buckets, and never reads the contents of your files. It only lists them.
+- **Least privilege.** A scan needs nothing more than permission to list. Optional permissions add features; when one is missing, that feature is skipped with a warning. Each cloud's permissions are listed under [Sign in and permissions](#sign-in-and-permissions).
+- **Your keys stay yours.** Keys and tokens typed into the app are kept in memory only: never saved to disk, logged, or sent anywhere but the provider. There is no telemetry.
 
-   | Cloud | Sign in once with |
-   |---|---|
-   | AWS | `aws login` or `aws sso login` |
-   | Google Cloud | `gcloud auth application-default login` |
-   | Azure | `az login` |
+## Install
 
-3. **Scan.** Start the app (**CloudDirStat** on a Mac, `clouddirstat-gui` on Windows and Linux), choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
+Download the latest [release](https://github.com/hossimo/CloudDirStat/releases) for your system:
 
-   ```sh
-   clouddirstat scan s3://my-bucket
-   clouddirstat scan gs://my-bucket
-   clouddirstat scan az://mystorageaccount/mycontainer
-   ```
+| System | Download | Contains |
+|---|---|---|
+| **Windows** (x64 or ARM64) | `clouddirstat-…-windows-msvc.zip` | `clouddirstat-gui` (the app) and `clouddirstat` (the command line) |
+| **Linux** (x64 or ARM64) | `clouddirstat-…-linux-gnu.tar.gz` | `clouddirstat-gui` (the app) and `clouddirstat` (the command line) |
+| **Mac** (Apple Silicon and Intel) | `CloudDirStat-…-macos.dmg` | The app. Open it and drag **CloudDirStat** to **Applications**. |
+| | `clouddirstat-…-macos.tar.gz` | The command line, a separate download (see [On a Mac](#on-a-mac)) |
 
-The programs are not code-signed with a developer certificate yet. On Windows, SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway**. For the Mac, see below.
+The programs are not code-signed with a developer certificate yet (see [Code signing needs funding](#code-signing-needs-funding)), so the first start needs one extra step:
 
-### Checking a download
+- **Windows:** SmartScreen may warn about an unrecognized app. Choose **More info → Run anyway**.
+- **Mac:** macOS blocks the app until you allow it once; see below.
 
-Every release file comes with a signed record from GitHub that it was built by this repository's release workflow. To check one, use the [GitHub CLI](https://cli.github.com):
-
-```sh
-gh attestation verify clouddirstat-v1.2.3-x86_64-pc-windows-msvc.zip --repo hossimo/CloudDirStat
-```
-
-If you'd rather not run unsigned programs at all, [build from source](#building-from-source).
+If you'd rather not run unsigned programs at all, you can [build from source](CONTRIBUTING.md#building-from-source).
 
 ### On a Mac
 
@@ -82,7 +66,7 @@ If you'd rather not run unsigned programs at all, [build from source](#building-
 - **macOS 14 Sonoma and earlier:** in Applications, right-click (or Control-click) **CloudDirStat**, choose **Open**, then click **Open** again in the dialog.
 - **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/CloudDirStat.app`. This removes the "downloaded from the internet" mark that makes macOS check the app before opening it, so only do it for a download you trust (see [Checking a download](#checking-a-download)).
 
-**The command line is a separate download.** The DMG contains only the app. To use the `clouddirstat` command in Terminal, also download `clouddirstat-…-macos.tar.gz` (one program for both Apple Silicon and Intel Macs) and install it:
+**Installing the command line.** The DMG contains only the app. To use the `clouddirstat` command in Terminal, download `clouddirstat-…-macos.tar.gz` (one program for both Apple Silicon and Intel Macs) and install it:
 
 ```sh
 cd ~/Downloads
@@ -94,7 +78,33 @@ sudo mv clouddirstat /usr/local/bin/        # or any folder on your PATH
 clouddirstat --version
 ```
 
-## Locations
+### Checking a download
+
+Every release file comes with a signed record from GitHub that it was built by this repository's release workflow. To check one, use the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify clouddirstat-v1.2.3-x86_64-pc-windows-msvc.zip --repo hossimo/CloudDirStat
+```
+
+## Quick start
+
+1. **Sign in** to your cloud with its own command-line tool. This is a one-time step; see [Sign in and permissions](#sign-in-and-permissions) for details and for key-based sign-in.
+
+   | Cloud | Sign in once with |
+   |---|---|
+   | AWS | `aws login` or `aws sso login` |
+   | Google Cloud | `gcloud auth application-default login` |
+   | Azure | `az login` |
+
+2. **Scan.** Start the app (**CloudDirStat** on a Mac, `clouddirstat-gui` on Windows and Linux), choose **S3**, **Google**, or **Azure**, type the bucket (for example `my-bucket`), and press **Scan**. Or from a terminal:
+
+   ```sh
+   clouddirstat scan s3://my-bucket
+   clouddirstat scan gs://my-bucket
+   clouddirstat scan az://mystorageaccount/mycontainer
+   ```
+
+### Locations
 
 A location says what to scan. Everything after the bucket (or container) is an optional folder prefix.
 
@@ -111,7 +121,7 @@ A location says what to scan. Everything after the bucket (or container) is an o
 
 In the app you don't need to type the `s3://`, `gs://`, or `az://` part: the **S3**, **Google**, and **Azure** buttons next to **Location** put it in for you, and switching between them keeps the rest of the location. Typing or pasting a full location selects the matching button, and an unknown scheme outlines the field in red. A location without a scheme is taken as S3. When scanning several buckets, each one appears as a top-level folder and is priced at its own region's rates; buckets you can't list are skipped with a warning.
 
-## Connect to your cloud
+## Sign in and permissions
 
 In the app, the sign-in choices to the right of **Location** change with the cloud you choose: **Profile / Access key** for `s3://`, **Google login / Access token** for `gs://`, and **Azure CLI / SAS token / Account key** for `az://`. The **Help** button repeats the essentials.
 
@@ -297,7 +307,7 @@ clouddirstat-gui s3://my-bucket --versions         # include old versions
 - **Legend tabs:** color the treemap by **Storage classes**, **Versions**, **Prefixes** (top-level folders), or **File types**.
 - **Filters:** click a legend row to show only those files everywhere, with sizes and costs recalculated. Click it again, press **Clear filter**, or press Esc to show everything.
 - **Versions** (checkbox): also lists old versions. In S3 these are noncurrent versions and delete markers; in Google Cloud, noncurrent and soft-deleted objects; in Azure, previous versions, snapshots, and soft-deleted blobs. Incomplete S3 uploads are always found.
-- **Estimate** (S3 only): bucket sizes, costs, and what a full scan would cost, from CloudWatch, without listing anything. See [Estimates](#s3-estimates-without-scanning).
+- **Estimate** (S3 only): bucket sizes, costs, and what a full scan would cost, from CloudWatch, without listing anything. See [S3 estimates without scanning](#s3-estimates-without-scanning).
 - **Stop** ends a scan and keeps what was found so far.
 - **Status bar:** the total cost per month, what the scan cost, and warnings (hover for details). While a whole S3 bucket is scanned, a progress bar compares the objects listed so far with CloudWatch's count.
 
@@ -323,7 +333,7 @@ clouddirstat estimate s3://
 | `--profile <NAME>` | S3 | default profile | AWS profile to sign in with |
 | `--region <REGION>` | S3 | found automatically | The bucket's region |
 | `--project <ID>` | Google | gcloud's project | Project whose buckets `gs://` scans |
-| `--versions` | `scan` | off | Also list old versions (see **Versions** above) |
+| `--versions` | `scan` | off | Also list old versions (see **Versions** under [Using the app](#using-the-app)) |
 | `--depth <N>` | `scan` | 2 | Folder levels to print |
 | `--top <N>` | `scan` | 10 | Entries to print per folder and in the largest-files list |
 | `--concurrency <N>` | `scan` | 32 | Maximum listing requests at once |
@@ -419,82 +429,7 @@ Remove the leading spaces (`region = us-east-1`). Indentation is only valid for 
 
 **`the account key is not valid`.** The field holds neither a key, a connection string, nor a SAS. Check that nothing was cut off when copying.
 
-## Building from source
-
-1. Install Rust with [rustup](https://rustup.rs). On Windows you also need the Visual Studio C++ Build Tools.
-2. Build:
-
-   ```sh
-   cargo build --release --locked
-   ```
-
-   `--locked` uses exactly the dependency versions in `Cargo.lock`, the ones the releases are built with. `rust-toolchain.toml` picks the Rust version; rustup installs it the first time.
-
-   The programs are `target/release/clouddirstat` and `target/release/clouddirstat-gui` (with `.exe` on Windows).
-
-Development commands:
-
-```sh
-cargo run -p clouddirstat -- scan s3://my-bucket
-cargo run -p clouddirstat-gui
-cargo test --workspace --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo fmt --all
-```
-
-<details>
-<summary>Project layout, memory use, demo data, versions, and releases</summary>
-
-### Project layout
-
-| Crate | Purpose |
-|---|---|
-| `crates/core` | Folder tree, size and cost totals, filters, treemap layout. No network access. |
-| `crates/providers` | Listing for S3 (with CloudWatch estimates), Google Cloud Storage, and Azure, plus price tables. |
-| `crates/cli` | The `clouddirstat` command-line program. |
-| `crates/gui` | The `clouddirstat-gui` app (egui). |
-
-Scanners send objects in batches while they list, and the tree is built as they arrive, so the app can draw while a scan runs. Each object takes a 48-byte node plus its name, stored in fixed-size blocks; full object keys are never kept. That is about 66 bytes per object. Measure it with:
-
-```sh
-cargo run --release -p clouddirstat-core --features demo --example memory -- 10000000
-```
-
-### Price tables
-
-The built-in prices are generated from the providers' public price lists (no credentials needed):
-
-```sh
-python scripts/update_s3_prices.py
-python scripts/update_gcs_prices.py
-python scripts/update_azure_prices.py
-```
-
-### Demo data (for screenshots)
-
-Build the app with the `demo` feature to scan made-up buckets instead of a real cloud, so screenshots never show real data. Release builds never include it.
-
-```sh
-cargo run --release -p clouddirstat-gui --features demo -- s3://
-```
-
-`s3://` shows six fictional `acme-*` buckets; `s3://acme-backups/` shows one. The data is the same every time; set `CLOUDDIRSTAT_DEMO_OBJECTS` for more or fewer objects (default 120,000).
-
-### Version numbers
-
-Versions come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and builds from later commits report `0.2.0+N` (N commits since the tag). Without a tag, the version in `Cargo.toml` is used. `--version` and the app's Help window also show the commit.
-
-### Making a release
-
-Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which builds all six targets, joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line, and attaches everything: two files for Mac, and one archive per Windows and Linux target. It also records a build provenance attestation for every file (see [Checking a download](#checking-a-download)). A release's files can't be replaced by publishing again; to rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
-
-</details>
-
 ## Roadmap
-
-Done: S3, Google Cloud Storage, and Azure scanning; folder list and treemap with zoom; cost estimates; old versions and incomplete uploads; scanning every bucket at once; largest files; filters; last modified dates; S3 estimates from CloudWatch; release builds for six platforms; a universal Mac app.
-
-Next:
 
 - [ ] More testing of Google Cloud Storage and Azure on real, larger buckets
 - [ ] Estimates without scanning for Google Cloud Storage and Azure
@@ -503,13 +438,17 @@ Next:
 
 ### Code signing needs funding
 
-I want to code-sign the Mac and Windows builds, so CloudDirStat opens like any other app, without the first-start steps described in [Quick start](#quick-start) and [On a Mac](#on-a-mac). Signing isn't free, though: Apple charges a yearly membership in its Developer Program (USD 99 per year) to sign and notarize Mac apps, and Windows signing needs a code-signing certificate or signing service, which also has a yearly cost.
+I want to code-sign the Mac and Windows builds, so CloudDirStat opens like any other app, without the first-start steps described in [Install](#install). Signing isn't free, though: Apple charges a yearly membership in its Developer Program (USD 99 per year) to sign and notarize Mac apps, and Windows signing needs a code-signing certificate or signing service, which also has a yearly cost.
 
-CloudDirStat is free and open source, so I will need to find funding to cover these costs before the builds can be signed. Until then, the builds work fully; they just need the one-time workaround the first time you open them.
+CloudDirStat is free and open source, so I will need to find funding to cover these costs before the builds can be signed. Until then, the builds work fully; they just need the one-time workaround the first time you open them. If CloudDirStat is useful to you and you'd like to help, you can [sponsor the project on GitHub](https://github.com/sponsors/hossimo) or [donate through PayPal](https://www.paypal.me/hossimo).
 
-## AI disclosure
+## About
 
-Parts of this project are developed with AI assistance (Claude). All code is reviewed, tested, and owned by the maintainer.
+CloudDirStat is a side project. It's a tool I've needed for years but couldn't make a reality until now.
+
+It's written in Rust. Rust isn't a language I would normally reach for, and I'm still learning it, but I wanted CloudDirStat to be future-proof and as safe as I could make it. That was only possible because I built the project with AI assistance (Claude). All code is reviewed, tested, and owned by me, the maintainer.
+
+Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md) for building from source, the project layout, and how releases are made.
 
 ## License
 

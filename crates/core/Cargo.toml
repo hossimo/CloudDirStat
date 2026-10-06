@@ -13,3 +13,7 @@ demo = []
 [[example]]
 name = "memory"
 required-features = ["demo"]
+
+[[example]]
+name = "treemap"
+required-features = ["demo"]

@@ -50,6 +50,12 @@ Scanners send objects in batches while they list, and the tree is built as they 
 cargo run --release -p clouddirstat-core --features demo --example memory -- 10000000
 ```
 
+The treemap is laid out again about once a second while a scan runs (less often if a layout gets slow, so it never takes more than about a tenth of the app's time). Layout only visits rectangles big enough to see, so its cost follows the window size more than the object count. Time it for a demo scan plus one flat folder of tiny objects with:
+
+```sh
+cargo run --release -p clouddirstat-core --features demo --example treemap -- 5000000 1000000
+```
+
 ## Price tables
 
 The built-in prices are generated from the providers' public price lists (no credentials needed):

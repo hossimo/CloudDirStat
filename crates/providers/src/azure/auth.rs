@@ -15,6 +15,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
+use super::location::is_account_name;
 use crate::http::{Http, Response};
 use crate::time::http_date;
 use crate::{Error, Result};
@@ -284,12 +285,18 @@ fn is_sas_connection_string(text: &str) -> bool {
 
 /// The account a connection string names, which must be `account` unless that is empty.
 fn connection_account(named: &str, account: &str) -> Result<String> {
-    if !account.is_empty() && !named.eq_ignore_ascii_case(account) {
+    let named = named.to_ascii_lowercase();
+    if !is_account_name(&named) {
+        return Err(Error::Credentials(format!(
+            "the connection string names {named:?}, which is not a storage account name"
+        )));
+    }
+    if !account.is_empty() && named != account {
         return Err(Error::Credentials(format!(
             "the connection string is for account {named}, not {account}"
         )));
     }
-    Ok(named.to_ascii_lowercase())
+    Ok(named)
 }
 
 fn check_endpoint_suffix(suffix: Option<&str>) -> Result<()> {
@@ -624,6 +631,31 @@ mod tests {
         }
         assert!(credentials.blob_auth("other", &tokens).is_err());
         assert!(credentials.blob_auth("acct", &tokens).is_ok());
+    }
+
+    #[test]
+    fn connection_strings_must_name_a_real_account() {
+        let tokens = Arc::new(CliTokens::default());
+        let with = |account_key: &str| AzureCredentials {
+            sas: None,
+            account_key: Some(account_key.to_owned()),
+        };
+        for connection in [
+            "BlobEndpoint=https://evil.example?.blob.core.windows.net/;SharedAccessSignature=sv=1&sig=a",
+            "BlobEndpoint=https://evil.example#.blob.core.windows.net/;SharedAccessSignature=sv=1&sig=a",
+            "AccountName=evil.example?;AccountKey=a2V5",
+            "AccountName=evil.example/x;AccountKey=a2V5",
+        ] {
+            assert!(
+                matches!(
+                    with(connection).blob_auth("", &tokens),
+                    Err(Error::Credentials(_))
+                ),
+                "{connection}"
+            );
+        }
+        let upper = with("AccountName=Acct;AccountKey=a2V5").blob_auth("acct", &tokens);
+        assert_eq!(upper.unwrap().account(), Some("acct"));
     }
 
     #[test]

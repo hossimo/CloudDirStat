@@ -18,6 +18,9 @@ use crate::http::{Http, encode};
 use crate::{Error, Result};
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+/// Where a service account key file may send its signed sign-in request: Google's token
+/// endpoints, current and old.
+const TOKEN_HOSTS: [&str; 2] = ["oauth2.googleapis.com", "accounts.google.com"];
 /// Read-only access to Cloud Storage is all a scan needs.
 const SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_only";
 /// Refresh this long before a token expires, so no request carries a stale one.
@@ -152,7 +155,7 @@ impl TokenSource {
                 Kind::ServiceAccount {
                     email: client_email,
                     key: signing_key(&private_key)?,
-                    token_uri: token_uri.unwrap_or_else(|| TOKEN_URL.to_owned()),
+                    token_uri: checked_token_uri(token_uri)?,
                 },
                 project_id,
             ),
@@ -285,6 +288,25 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     None
 }
 
+/// The key file's `token_uri`, which must be one of Google's: the signed request sent
+/// there is enough to sign in as the service account.
+fn checked_token_uri(token_uri: Option<String>) -> Result<String> {
+    let Some(uri) = token_uri else {
+        return Ok(TOKEN_URL.to_owned());
+    };
+    let host = uri
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next());
+    if host.is_some_and(|host| TOKEN_HOSTS.contains(&host)) {
+        Ok(uri)
+    } else {
+        Err(Error::Credentials(format!(
+            "the service account key file's token_uri is not a Google sign-in address: {}",
+            host.unwrap_or("not https")
+        )))
+    }
+}
+
 fn signing_key(pem: &str) -> Result<Arc<dyn SigningKey>> {
     let invalid = |error: String| {
         Error::Credentials(format!(
@@ -368,6 +390,25 @@ mod tests {
             project: Some("p".to_owned()),
         };
         assert!(!format!("{credentials:?}").contains("ya29"));
+    }
+
+    #[test]
+    fn service_accounts_sign_in_only_at_google() {
+        assert_eq!(checked_token_uri(None).unwrap(), TOKEN_URL);
+        for good in [
+            "https://oauth2.googleapis.com/token",
+            "https://accounts.google.com/o/oauth2/token",
+        ] {
+            assert_eq!(checked_token_uri(Some(good.to_owned())).unwrap(), good);
+        }
+        for bad in [
+            "https://evil.example/token",
+            "https://oauth2.googleapis.com.evil.example/token",
+            "https://evil.example?oauth2.googleapis.com/token",
+            "http://oauth2.googleapis.com/token",
+        ] {
+            assert!(checked_token_uri(Some(bad.to_owned())).is_err(), "{bad}");
+        }
     }
 
     #[test]

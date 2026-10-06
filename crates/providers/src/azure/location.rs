@@ -55,8 +55,9 @@ impl FromStr for AzureLocation {
     }
 }
 
-/// Storage account names: 3 to 24 lowercase letters and digits.
-fn is_account_name(name: &str) -> bool {
+/// Storage account names: 3 to 24 lowercase letters and digits. Also checked wherever
+/// an account name comes from elsewhere, since it becomes part of the URL's host.
+pub(super) fn is_account_name(name: &str) -> bool {
     (3..=24).contains(&name.len())
         && name
             .bytes()

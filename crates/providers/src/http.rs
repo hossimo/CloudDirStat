@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use http::{HeaderMap, Method, Request, StatusCode};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
@@ -18,6 +18,9 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 /// Attempts for throttled (429) and server (5xx) errors, and dropped connections.
 const ATTEMPTS: u32 = 4;
 const FIRST_BACKOFF: Duration = Duration::from_millis(500);
+/// Far more than any listing page (Azure's 5,000 blobs are a few MB), so a response that
+/// never ends can't use up memory.
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct Http {
@@ -118,10 +121,10 @@ impl Http {
             .await
             .map_err(|error| Error::Network(format!("could not reach {host}: {error}")))?;
         let (parts, body) = response.into_parts();
-        let body = body
+        let body = Limited::new(body, MAX_BODY_BYTES)
             .collect()
             .await
-            .map_err(|error| Error::Network(format!("connection to {host} failed: {error}")))?
+            .map_err(|error| Error::Network(format!("response from {host} failed: {error}")))?
             .to_bytes();
         Ok(Response {
             status: parts.status,
@@ -133,7 +136,7 @@ impl Http {
 
 /// The host of a URL, for error messages (never the path or query, which may hold
 /// tokens).
-fn host(url: &str) -> &str {
+pub(crate) fn host(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     rest.split(['/', '?']).next().unwrap_or(rest)
 }

@@ -324,7 +324,10 @@ impl AzureScanner {
                 encode(&subscription.subscription_id)
             );
             let found: Vec<StorageAccount> = self.arm_list(url).await?;
-            accounts.extend(found.into_iter().map(|account| Account {
+            let valid = found
+                .into_iter()
+                .filter(|account| location::is_account_name(&account.name));
+            accounts.extend(valid.map(|account| Account {
                 name: account.name,
                 placement: AccountPlacement {
                     region: account.location,
@@ -359,7 +362,7 @@ impl AzureScanner {
                 ))
             })?;
             items.extend(page.value);
-            next = page.next_link;
+            next = page.next_link.map(arm_link).transpose()?;
         }
         Ok(items)
     }
@@ -383,6 +386,19 @@ impl AzureScanner {
                 None => return Ok(containers),
             }
         }
+    }
+}
+
+/// A next-page link from Resource Manager, which must stay on Resource Manager: the
+/// request that follows it carries the management token.
+fn arm_link(link: String) -> Result<String> {
+    if link.starts_with(&format!("{ARM}/")) {
+        Ok(link)
+    } else {
+        Err(Error::Network(format!(
+            "Azure Resource Manager sent a next page link to another host ({})",
+            crate::http::host(&link)
+        )))
     }
 }
 
@@ -816,6 +832,19 @@ mod tests {
             Some("00000000-1111-2222-3333-444444444444")
         );
         assert_eq!(tenant_of_challenge("Bearer realm=\"x\""), None);
+    }
+
+    #[test]
+    fn next_page_links_stay_on_resource_manager() {
+        let link = format!("{ARM}/subscriptions?api-version=2022-12-01&$skiptoken=x");
+        assert_eq!(arm_link(link.clone()).unwrap(), link);
+        for other in [
+            "https://evil.example/subscriptions",
+            "https://management.azure.com.evil.example/x",
+            "http://management.azure.com/x",
+        ] {
+            assert!(arm_link(other.to_owned()).is_err(), "{other}");
+        }
     }
 
     #[test]

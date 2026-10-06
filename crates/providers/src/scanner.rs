@@ -69,7 +69,8 @@ pub enum Scanner {
 
 impl Scanner {
     /// Signs in and finds what to scan (for example each bucket's region).
-    /// `region` overrides region detection where the provider has regions.
+    /// `region` stands in for region detection where S3 would look the region up (see
+    /// [`S3Scanner::connect`]); other providers ignore it.
     pub async fn connect(
         location: &Location,
         credentials: &Credentials,

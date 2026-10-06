@@ -3,6 +3,7 @@ mod env_file;
 mod error;
 pub mod gcs;
 mod http;
+mod listing;
 mod location;
 pub mod s3;
 mod scanner;

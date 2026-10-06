@@ -1,40 +1,32 @@
 //! Azure Blob Storage, through the Blob REST API; storage accounts and their regions
 //! come from Azure Resource Manager.
 
+mod arm;
 mod auth;
 mod location;
+mod parse;
 mod prices;
 mod pricing;
 
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use clouddirstat_core::{Entry, EntryKind};
 use futures_util::{StreamExt, stream};
-use serde::Deserialize;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 
 pub use auth::AzureCredentials;
 pub use location::AzureLocation;
 pub use pricing::{AccountPlacement, AzurePricing};
 
-use self::auth::{BlobAuth, CliTokens, MANAGEMENT, STORAGE};
+use self::auth::{BlobAuth, CliTokens, STORAGE};
+use self::parse::{Blob, azure_error, bad_xml, parse_blobs, parse_containers};
 use crate::http::{Http, Response, encode};
-use crate::scanner::class_name;
-use crate::time::http_date_seconds;
-use crate::xml::{XmlEvent, walk};
+use crate::listing::{self, PrefixLister, ScanContext};
 use crate::{EntrySender, Error, Result, ScanOptions, ScanStats, SkippedBucket};
 
 const API_VERSION: &str = "2023-11-03";
-const ARM: &str = "https://management.azure.com";
 const DEFAULT_TIER: &str = "Hot";
-/// The access tiers Azure lists blobs in.
-const TIERS: &[&str] = &["Hot", "Cool", "Cold", "Archive", "Premium"];
-const MAX_SPLIT_DEPTH: usize = 3;
-/// Containers in progress at the same time when scanning more than one.
-const CONTAINERS_AT_ONCE: usize = 16;
 /// Subscriptions (or accounts) looked up at the same time while connecting.
 const LOOKUPS_AT_ONCE: usize = 16;
 
@@ -64,33 +56,6 @@ struct Target {
     /// depending on how much the location covers.
     key_prefix: String,
     list_price_per_1000: f64,
-}
-
-#[derive(Deserialize)]
-struct ArmList<T> {
-    #[serde(default = "Vec::new")]
-    value: Vec<T>,
-    #[serde(rename = "nextLink")]
-    next_link: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Subscription {
-    subscription_id: String,
-}
-
-#[derive(Deserialize)]
-struct StorageAccount {
-    name: String,
-    #[serde(default)]
-    location: String,
-    sku: Option<Sku>,
-}
-
-#[derive(Deserialize)]
-struct Sku {
-    name: String,
 }
 
 impl AzureScanner {
@@ -187,10 +152,13 @@ impl AzureScanner {
     }
 
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
-        let requests = Arc::new(AtomicU64::new(self.setup_requests.load(Ordering::Relaxed)));
-        let cost = Arc::new(AtomicU64::new(0));
-        let slots = Arc::new(Semaphore::new(options.concurrency.max(1)));
-        let warnings = Arc::new(Mutex::new(self.warnings.clone()));
+        let context = ScanContext::new(
+            options.concurrency,
+            sink,
+            self.setup_requests.load(Ordering::Relaxed),
+            0.0,
+            self.warnings.clone(),
+        );
         let lister = |target: &Target| Lister {
             http: self.http.clone(),
             auth: Arc::clone(&self.auth),
@@ -200,53 +168,29 @@ impl AzureScanner {
             include_versions: options.include_versions,
             versions_unsupported: Arc::new(AtomicBool::new(false)),
             list_price_per_1000: target.list_price_per_1000,
-            requests: Arc::clone(&requests),
-            cost_nanodollars: Arc::clone(&cost),
-            slots: Arc::clone(&slots),
-            warnings: Arc::clone(&warnings),
-            sink: sink.clone(),
+            context: context.clone(),
         };
 
         let mut skipped = self.skipped.clone();
         if self.targets.len() == 1 && !self.location.container.is_empty() {
             let prefix = self.location.prefix.clone();
-            scan_container(lister(&self.targets[0]), prefix, options.concurrency).await?;
+            listing::list_prefix(lister(&self.targets[0]), prefix, options.concurrency).await?;
         } else {
-            let mut tasks = JoinSet::new();
-            for target in &self.targets {
-                if tasks.len() >= CONTAINERS_AT_ONCE
-                    && let Some(finished) = tasks.join_next().await
-                {
-                    record_result(finished?, &mut skipped)?;
-                }
-                let lister = lister(target);
-                let name = target.key_prefix.trim_end_matches('/').to_owned();
-                let concurrency = options.concurrency;
-                tasks.spawn(async move {
-                    (
-                        name,
-                        scan_container(lister, String::new(), concurrency).await,
-                    )
-                });
-            }
-            while let Some(finished) = tasks.join_next().await {
-                record_result(finished?, &mut skipped)?;
-            }
+            // Collected before awaiting: holding the lazy iterator across `.await`
+            // would keep this future from being `Send`.
+            let scans: Vec<_> = self
+                .targets
+                .iter()
+                .map(|target| {
+                    let scan =
+                        listing::list_prefix(lister(target), String::new(), options.concurrency);
+                    (target.key_prefix.trim_end_matches('/').to_owned(), scan)
+                })
+                .collect();
+            listing::each_bucket(scans, &mut skipped).await?;
         }
-
-        let list_requests = requests.load(Ordering::Relaxed);
-        let cost_usd = cost.load(Ordering::Relaxed) as f64 / 1e9;
-        let warnings = warnings.lock().map(|list| list.clone()).unwrap_or_default();
-        Ok(ScanStats {
-            list_requests,
-            list_price_per_1000_usd: if list_requests == 0 {
-                AzurePricing::list_price_per_1000(&AccountPlacement::default())
-            } else {
-                cost_usd * 1000.0 / list_requests as f64
-            },
-            skipped_buckets: skipped,
-            warnings,
-        })
+        let default_price = AzurePricing::list_price_per_1000(&AccountPlacement::default());
+        Ok(context.stats(skipped, default_price))
     }
 
     fn add_target(&mut self, account: &str, container: String, key_prefix: String) {
@@ -327,89 +271,6 @@ impl AzureScanner {
         placement
     }
 
-    /// Every storage account in every subscription the user can read (needs the Reader
-    /// role, or any role with Microsoft.Storage/storageAccounts/read). A subscription
-    /// that can't be read is warned about and left out; if none can, that's an error.
-    async fn resource_manager_accounts(&mut self) -> Result<Vec<Account>> {
-        let subscriptions: Vec<Subscription> = self
-            .arm_list(format!("{ARM}/subscriptions?api-version=2022-12-01"))
-            .await?;
-        let this = &*self;
-        let lookups: Vec<(String, Result<Vec<StorageAccount>>)> = stream::iter(subscriptions)
-            .map(|subscription| async move {
-                let url = format!(
-                    "{ARM}/subscriptions/{}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01",
-                    encode(&subscription.subscription_id)
-                );
-                (subscription.subscription_id, this.arm_list(url).await)
-            })
-            .buffered(LOOKUPS_AT_ONCE)
-            .collect()
-            .await;
-
-        let mut accounts = Vec::new();
-        let mut warnings = Vec::new();
-        let mut first_error = None;
-        for (subscription, found) in lookups {
-            match found {
-                Ok(found) => accounts.extend(
-                    found
-                        .into_iter()
-                        .filter(|account| location::is_account_name(&account.name))
-                        .map(|account| Account {
-                            name: account.name,
-                            placement: AccountPlacement {
-                                region: account.location,
-                                sku: account.sku.map(|sku| sku.name).unwrap_or_default(),
-                            },
-                        }),
-                ),
-                Err(error) => {
-                    warnings.push(format!(
-                        "subscription {subscription}: storage accounts not listed. {error}"
-                    ));
-                    first_error.get_or_insert(error);
-                }
-            }
-        }
-        if accounts.is_empty()
-            && let Some(error) = first_error
-        {
-            return Err(error);
-        }
-        self.warnings.extend(warnings);
-        Ok(accounts)
-    }
-
-    async fn arm_list<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<Vec<T>> {
-        let mut items = Vec::new();
-        let mut next = Some(url);
-        while let Some(url) = next {
-            let token = self.tokens.token(MANAGEMENT).await?;
-            let authorization = format!("Bearer {token}");
-            let response = self
-                .http
-                .get(&url, &[("authorization", &authorization)])
-                .await?;
-            self.setup_requests.fetch_add(1, Ordering::Relaxed);
-            if !response.status.is_success() {
-                return Err(Error::Request {
-                    operation: "List storage accounts",
-                    permission: "the Reader role",
-                    message: arm_error(&response),
-                });
-            }
-            let page: ArmList<T> = serde_json::from_slice(&response.body).map_err(|error| {
-                Error::Network(format!(
-                    "unexpected Azure Resource Manager response: {error}"
-                ))
-            })?;
-            items.extend(page.value);
-            next = page.next_link.map(arm_link).transpose()?;
-        }
-        Ok(items)
-    }
-
     async fn containers(&self, account: &str) -> Result<Vec<String>> {
         let mut containers = Vec::new();
         let mut marker: Option<String> = None;
@@ -423,81 +284,13 @@ impl AzureScanner {
             self.setup_requests.fetch_add(1, Ordering::Relaxed);
             check(&response, "List Containers", self.auth.needs(true), account)?;
             let page = parse_containers(&response.text()).map_err(bad_xml)?;
-            containers.extend(page.0);
-            match page.1 {
+            containers.extend(page.names);
+            match page.next_marker {
                 Some(next) => marker = Some(next),
                 None => return Ok(containers),
             }
         }
     }
-}
-
-/// A next-page link from Resource Manager, which must stay on Resource Manager: the
-/// request that follows it carries the management token.
-fn arm_link(link: String) -> Result<String> {
-    if link.starts_with(&format!("{ARM}/")) {
-        Ok(link)
-    } else {
-        Err(Error::Network(format!(
-            "Azure Resource Manager sent a next page link to another host ({})",
-            crate::http::host(&link)
-        )))
-    }
-}
-
-fn record_result(
-    (name, result): (String, Result<()>),
-    skipped: &mut Vec<SkippedBucket>,
-) -> Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(Error::Cancelled) => Err(Error::Cancelled),
-        Err(error) => {
-            skipped.push(SkippedBucket {
-                bucket: name,
-                reason: error.to_string(),
-            });
-            Ok(())
-        }
-    }
-}
-
-/// Lists everything under `prefix`: expands prefixes breadth-first until there are
-/// enough to keep `concurrency` requests busy, then lists each one fully in parallel.
-async fn scan_container(lister: Lister, prefix: String, concurrency: usize) -> Result<()> {
-    let concurrency = concurrency.max(1);
-    let mut prefixes = vec![prefix];
-    for _ in 0..MAX_SPLIT_DEPTH {
-        if prefixes.is_empty() || prefixes.len() >= concurrency {
-            break;
-        }
-        // Each level's prefixes are listed in parallel, within the shared slots.
-        let mut level = JoinSet::new();
-        for prefix in prefixes {
-            let lister = lister.clone();
-            level.spawn(async move { lister.list(prefix, true).await });
-        }
-        let mut subprefixes = Vec::new();
-        while let Some(found) = level.join_next().await {
-            subprefixes.extend(found??);
-        }
-        prefixes = subprefixes;
-    }
-
-    let mut tasks = JoinSet::new();
-    for prefix in prefixes {
-        if tasks.len() >= concurrency
-            && let Some(finished) = tasks.join_next().await
-        {
-            finished??;
-        }
-        let lister = lister.clone();
-        tasks.spawn(async move { lister.list(prefix, false).await.map(drop) });
-    }
-    while let Some(finished) = tasks.join_next().await {
-        finished??;
-    }
-    Ok(())
 }
 
 #[derive(Clone)]
@@ -512,18 +305,12 @@ struct Lister {
     /// that is known, the rest of the container is listed without them.
     versions_unsupported: Arc<AtomicBool>,
     list_price_per_1000: f64,
-    requests: Arc<AtomicU64>,
-    cost_nanodollars: Arc<AtomicU64>,
-    slots: Arc<Semaphore>,
-    warnings: Arc<Mutex<Vec<String>>>,
-    sink: EntrySender,
+    context: ScanContext,
 }
 
-impl Lister {
-    /// Lists blobs under `prefix`, sending them to the tree, and returns the
-    /// subprefixes when `split` asks for them (listing with a `/` delimiter).
+impl PrefixLister for Lister {
     async fn list(&self, prefix: String, split: bool) -> Result<Vec<String>> {
-        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+        let _slot = self.context.slot().await?;
         let mut subprefixes = Vec::new();
         let mut marker: Option<String> = None;
         loop {
@@ -546,10 +333,12 @@ impl Lister {
             }
 
             let response = self.auth.get(&self.http, &url, API_VERSION).await?;
-            self.count_request();
-            if versions && response.status.as_u16() == 400 {
+            self.context.count_request(self.list_price_per_1000);
+            // Data Lake accounts reject listing versions outright, on the first page; a
+            // 400 later on has some other cause, and is reported as the error it is.
+            if versions && marker.is_none() && response.status.as_u16() == 400 {
                 self.versions_unsupported.store(true, Ordering::Relaxed);
-                self.warn(format!(
+                self.context.warn(format!(
                     "{}/{}: versions and soft-deleted blobs not listed ({})",
                     self.account,
                     self.container,
@@ -570,10 +359,7 @@ impl Lister {
                 .into_iter()
                 .map(|blob| self.entry(blob))
                 .collect();
-            self.sink
-                .send(entries)
-                .await
-                .map_err(|_| Error::Cancelled)?;
+            self.context.send(entries).await?;
             subprefixes.extend(page.prefixes);
             match page.next_marker {
                 Some(next) => marker = Some(next),
@@ -581,7 +367,9 @@ impl Lister {
             }
         }
     }
+}
 
+impl Lister {
     fn entry(&self, blob: Blob) -> Entry {
         let noncurrent = blob.deleted || blob.snapshot || (blob.version && !blob.current_version);
         Entry {
@@ -594,19 +382,6 @@ impl Lister {
                 EntryKind::Current
             },
             last_modified: blob.last_modified,
-        }
-    }
-
-    fn count_request(&self) {
-        self.requests.fetch_add(1, Ordering::Relaxed);
-        let nanodollars = (self.list_price_per_1000 * 1e6).round() as u64;
-        self.cost_nanodollars
-            .fetch_add(nanodollars, Ordering::Relaxed);
-    }
-
-    fn warn(&self, warning: String) {
-        if let Ok(mut warnings) = self.warnings.lock() {
-            warnings.push(warning);
         }
     }
 }
@@ -675,211 +450,9 @@ fn container_path(container: &str) -> String {
     encode(container).replace("%24", "$")
 }
 
-fn bad_xml(error: String) -> Error {
-    Error::Network(format!("unexpected Blob Storage response: {error}"))
-}
-
-/// `Code: Message` of a Blob service error body, or the HTTP status.
-fn azure_error(response: &Response) -> String {
-    let mut code = String::new();
-    let mut message = String::new();
-    let _ = walk(&response.text(), |event| {
-        if let XmlEvent::End(path, text, _) = event {
-            match path {
-                [error, name] if error == "Error" && name == "Code" => code = text.to_owned(),
-                [error, name] if error == "Error" && name == "Message" => message = text.to_owned(),
-                _ => {}
-            }
-        }
-    });
-    // The message ends with a request ID and time on their own lines.
-    let message = message.lines().next().unwrap_or_default().trim();
-    match (code.is_empty(), message.is_empty()) {
-        (false, false) => format!("{code}: {message}"),
-        (false, true) => code,
-        _ => format!("HTTP {}", response.status),
-    }
-}
-
-/// The message of an Azure Resource Manager error (`{"error": {"message": ...}}`).
-fn arm_error(response: &Response) -> String {
-    #[derive(Deserialize)]
-    struct Body {
-        error: Detail,
-    }
-    #[derive(Deserialize)]
-    struct Detail {
-        code: String,
-        message: String,
-    }
-    match serde_json::from_slice::<Body>(&response.body) {
-        Ok(body) => format!("{}: {}", body.error.code, body.error.message),
-        Err(_) => format!("HTTP {}", response.status),
-    }
-}
-
-#[derive(Debug, Default, PartialEq)]
-struct Blob {
-    name: String,
-    deleted: bool,
-    snapshot: bool,
-    version: bool,
-    current_version: bool,
-    size: u64,
-    tier: Option<Cow<'static, str>>,
-    /// Seconds since the Unix epoch.
-    last_modified: Option<u64>,
-}
-
-#[derive(Debug, Default)]
-struct BlobPage {
-    blobs: Vec<Blob>,
-    prefixes: Vec<String>,
-    next_marker: Option<String>,
-}
-
-/// Blob names that XML cannot hold come percent-encoded, marked `Encoded="true"`.
-fn blob_name(text: &str, encoded: bool) -> String {
-    if encoded {
-        percent_encoding::percent_decode_str(text)
-            .decode_utf8_lossy()
-            .into_owned()
-    } else {
-        text.to_owned()
-    }
-}
-
-/// A marker for the next page; empty means there is none.
-fn next_marker(text: &str) -> Option<String> {
-    (!text.is_empty()).then(|| text.to_owned())
-}
-
-fn parse_blobs(xml: &str) -> std::result::Result<BlobPage, String> {
-    let mut page = BlobPage::default();
-    let mut blob: Option<Blob> = None;
-    walk(xml, |event| match event {
-        XmlEvent::Start([.., list, item]) if list == "Blobs" && item == "Blob" => {
-            blob = Some(Blob::default());
-        }
-        XmlEvent::Start(_) => {}
-        XmlEvent::End(path, text, encoded) => match path {
-            [.., list, item] if list == "Blobs" && item == "Blob" => {
-                page.blobs.extend(blob.take());
-            }
-            [.., item, name] if item == "BlobPrefix" && name == "Name" => {
-                page.prefixes.push(blob_name(text, encoded));
-            }
-            [root, marker] if root == "EnumerationResults" && marker == "NextMarker" => {
-                page.next_marker = next_marker(text);
-            }
-            [.., item, field] if item == "Blob" => {
-                if let Some(blob) = &mut blob {
-                    match field.as_str() {
-                        "Name" => blob.name = blob_name(text, encoded),
-                        "Deleted" => blob.deleted = text == "true",
-                        "Snapshot" => blob.snapshot = !text.is_empty(),
-                        "VersionId" => blob.version = !text.is_empty(),
-                        "IsCurrentVersion" => blob.current_version = text == "true",
-                        _ => {}
-                    }
-                }
-            }
-            [.., item, properties, field] if item == "Blob" && properties == "Properties" => {
-                if let Some(blob) = &mut blob {
-                    match field.as_str() {
-                        "Content-Length" => blob.size = text.parse().unwrap_or(0),
-                        "AccessTier" => {
-                            blob.tier = (!text.is_empty()).then(|| class_name(text, TIERS));
-                        }
-                        "Last-Modified" => blob.last_modified = http_date_seconds(text),
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        },
-    })?;
-    Ok(page)
-}
-
-/// Container names and the marker of the next page.
-fn parse_containers(xml: &str) -> std::result::Result<(Vec<String>, Option<String>), String> {
-    let mut containers = Vec::new();
-    let mut next = None;
-    walk(xml, |event| {
-        if let XmlEvent::End(path, text, _) = event {
-            match path {
-                [.., item, name] if item == "Container" && name == "Name" => {
-                    containers.push(text.to_owned());
-                }
-                [root, marker] if root == "EnumerationResults" && marker == "NextMarker" => {
-                    next = next_marker(text);
-                }
-                _ => {}
-            }
-        }
-    })?;
-    Ok((containers, next))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const PAGE: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<EnumerationResults ServiceEndpoint="https://acct.blob.core.windows.net/" ContainerName="photos">
-  <Prefix/><MaxResults>5000</MaxResults><Delimiter>/</Delimiter>
-  <Blobs>
-    <Blob>
-      <Name>a &amp; b.jpg</Name>
-      <VersionId>2026-01-01T00:00:00.0000000Z</VersionId>
-      <IsCurrentVersion>true</IsCurrentVersion>
-      <Properties>
-        <Last-Modified>Tue, 29 Sep 2026 00:00:00 GMT</Last-Modified>
-        <Content-Length>1024</Content-Length>
-        <BlobType>BlockBlob</BlobType>
-        <AccessTier>Cool</AccessTier>
-      </Properties>
-      <Metadata/>
-    </Blob>
-    <Blob>
-      <Name>a &amp; b.jpg</Name>
-      <VersionId>2025-01-01T00:00:00.0000000Z</VersionId>
-      <Properties><Content-Length>512</Content-Length></Properties>
-    </Blob>
-    <Blob>
-      <Name Encoded="true">odd%01name</Name>
-      <Deleted>true</Deleted>
-      <Properties><Content-Length>7</Content-Length><AccessTier>Archive</AccessTier></Properties>
-    </Blob>
-    <BlobPrefix><Name>2024/</Name></BlobPrefix>
-  </Blobs>
-  <NextMarker>2!abc</NextMarker>
-</EnumerationResults>"#;
-
-    #[test]
-    fn parses_blob_pages() {
-        let page = parse_blobs(PAGE).unwrap();
-        assert_eq!(page.prefixes, ["2024/"]);
-        assert_eq!(page.next_marker.as_deref(), Some("2!abc"));
-        assert_eq!(page.blobs.len(), 3);
-        assert_eq!(
-            page.blobs[0],
-            Blob {
-                name: "a & b.jpg".to_owned(),
-                deleted: false,
-                snapshot: false,
-                version: true,
-                current_version: true,
-                size: 1024,
-                tier: Some("Cool".into()),
-                last_modified: Some(1_790_640_000),
-            }
-        );
-        assert!(page.blobs[1].version && !page.blobs[1].current_version);
-        assert_eq!(page.blobs[2].name, "odd\u{1}name");
-        assert!(page.blobs[2].deleted);
-    }
 
     #[test]
     fn finds_the_tenant_in_a_bearer_challenge() {
@@ -894,29 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn next_page_links_stay_on_resource_manager() {
-        let link = format!("{ARM}/subscriptions?api-version=2022-12-01&$skiptoken=x");
-        assert_eq!(arm_link(link.clone()).unwrap(), link);
-        for other in [
-            "https://evil.example/subscriptions",
-            "https://management.azure.com.evil.example/x",
-            "http://management.azure.com/x",
-        ] {
-            assert!(arm_link(other.to_owned()).is_err(), "{other}");
-        }
-    }
-
-    #[test]
     fn special_containers_keep_their_dollar_sign() {
         assert_eq!(container_path("$web"), "$web");
         assert_eq!(container_path("photos-2024"), "photos-2024");
-    }
-
-    #[test]
-    fn parses_container_pages() {
-        let xml = r#"<EnumerationResults><Containers><Container><Name>logs</Name></Container><Container><Name>photos</Name></Container></Containers><NextMarker/></EnumerationResults>"#;
-        let (containers, next) = parse_containers(xml).unwrap();
-        assert_eq!(containers, ["logs", "photos"]);
-        assert_eq!(next, None);
     }
 }

@@ -256,7 +256,7 @@ impl DemoBucket {
         let entry = |size, kind, modified| Entry {
             key: key.clone(),
             size,
-            storage_class: class.to_owned(),
+            storage_class: class.into(),
             kind,
             last_modified: Some(modified),
         };

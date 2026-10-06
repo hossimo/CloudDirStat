@@ -184,7 +184,7 @@ mod tests {
             .monthly_cost(&Entry {
                 key: key.to_owned(),
                 size: 1024 * 1024 * 1024,
-                storage_class: tier.to_owned(),
+                storage_class: tier.to_owned().into(),
                 kind: EntryKind::Current,
                 last_modified: None,
             })

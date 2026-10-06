@@ -339,9 +339,15 @@ async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Resu
         if prefixes.is_empty() || prefixes.len() >= concurrency {
             break;
         }
-        let mut subprefixes = Vec::new();
+        // Each level's prefixes are listed in parallel, within the shared slots.
+        let mut level = JoinSet::new();
         for prefix in prefixes {
-            subprefixes.extend(lister.list(prefix, Some("/")).await?);
+            let lister = lister.clone();
+            level.spawn(async move { lister.list(prefix, Some("/")).await });
+        }
+        let mut subprefixes = Vec::new();
+        while let Some(found) = level.join_next().await {
+            subprefixes.extend(found??);
         }
         prefixes = subprefixes;
     }
@@ -389,7 +395,8 @@ impl Lister {
     /// With versions, soft-deleted objects (billed until their retention ends) come
     /// from a second listing of the same prefix. Both are sorted by name, so they are
     /// merged as they arrive: every version of a name reaches the tree together, which
-    /// is how it recognizes them as one object.
+    /// is how it recognizes them as one object. The two listings share one slot, so with
+    /// versions a slot can have two requests in flight.
     async fn list(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
         let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
         let mut live = Pages::new(prefix.clone(), false);
@@ -397,18 +404,30 @@ impl Lister {
             .then(|| Pages::new(prefix, true));
         let mut subprefixes = BTreeSet::new();
         loop {
-            if live.wants_page() {
-                subprefixes.extend(self.next_page(&mut live, delimiter).await?);
-            }
-            if let Some(pages) = deleted.as_mut().filter(|pages| pages.wants_page()) {
-                match self.next_page(pages, delimiter).await {
-                    Ok(prefixes) => subprefixes.extend(prefixes),
-                    Err(Error::Cancelled) => return Err(Error::Cancelled),
-                    Err(error) => {
-                        self.soft_deleted_failed(&error);
-                        deleted = None;
-                    }
+            // The two listings' next pages are fetched at the same time.
+            let live_page = async {
+                if live.wants_page() {
+                    self.next_page(&mut live, delimiter).await
+                } else {
+                    Ok(Vec::new())
                 }
+            };
+            let deleted_page = async {
+                match deleted.as_mut().filter(|pages| pages.wants_page()) {
+                    Some(pages) => Some(self.next_page(pages, delimiter).await),
+                    None => None,
+                }
+            };
+            let (live_page, deleted_page) = tokio::join!(live_page, deleted_page);
+            subprefixes.extend(live_page?);
+            match deleted_page {
+                Some(Ok(prefixes)) => subprefixes.extend(prefixes),
+                Some(Err(Error::Cancelled)) => return Err(Error::Cancelled),
+                Some(Err(error)) => {
+                    self.soft_deleted_failed(&error);
+                    deleted = None;
+                }
+                None => {}
             }
 
             let mut entries = Vec::new();
@@ -485,7 +504,8 @@ impl Lister {
             size: object.size.and_then(|size| size.parse().ok()).unwrap_or(0),
             storage_class: object
                 .storage_class
-                .unwrap_or_else(|| self.default_class.clone()),
+                .unwrap_or_else(|| self.default_class.clone())
+                .into(),
             kind: if noncurrent {
                 EntryKind::Noncurrent
             } else {

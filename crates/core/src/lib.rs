@@ -7,6 +7,7 @@ mod format;
 mod tree;
 mod treemap;
 
+use std::borrow::Cow;
 use std::ops::{AddAssign, SubAssign};
 
 /// The app version: from the nearest git tag when built from a checkout (see build.rs),
@@ -138,7 +139,8 @@ impl EntryKind {
 pub struct Entry {
     pub key: String,
     pub size: u64,
-    pub storage_class: String,
+    /// Borrowed for the classes a provider knows, so most entries don't allocate it.
+    pub storage_class: Cow<'static, str>,
     pub kind: EntryKind,
     /// Seconds since the Unix epoch, when the provider reports it. For an incomplete
     /// upload, when it was started.

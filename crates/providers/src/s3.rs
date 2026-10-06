@@ -4,6 +4,7 @@ mod location;
 mod prices;
 mod pricing;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,11 +26,27 @@ pub use credentials::{AccessKey, CredentialSource};
 pub use location::S3Location;
 pub use pricing::S3Pricing;
 
+use crate::scanner::class_name;
 use crate::{EntrySender, Error, Result, ScanOptions, ScanStats, SkippedBucket};
 
 /// What S3 charges per 1,000 LIST requests.
 pub const LIST_PRICE_PER_1000_USD: f64 = 0.005;
 const DEFAULT_STORAGE_CLASS: &str = "STANDARD";
+/// The storage classes S3 lists objects in.
+const STORAGE_CLASSES: &[&str] = &[
+    "STANDARD",
+    "INTELLIGENT_TIERING",
+    "STANDARD_IA",
+    "ONEZONE_IA",
+    "GLACIER_IR",
+    "GLACIER",
+    "DEEP_ARCHIVE",
+    "REDUCED_REDUNDANCY",
+    "EXPRESS_ONEZONE",
+    "OUTPOSTS",
+    "SNOW",
+    "FSX_OPENZFS",
+];
 const MAX_SPLIT_DEPTH: usize = 3;
 /// Buckets in progress at the same time in an all-buckets scan. They share the
 /// request slots, so a big bucket gets all of them once the small ones are done.
@@ -240,9 +257,15 @@ async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Resu
         if prefixes.is_empty() || prefixes.len() >= concurrency {
             break;
         }
-        let mut subprefixes = Vec::new();
+        // Each level's prefixes are listed in parallel, within the shared slots.
+        let mut level = JoinSet::new();
         for prefix in prefixes {
-            subprefixes.extend(lister.list(prefix, Some("/")).await?);
+            let lister = lister.clone();
+            level.spawn(async move { lister.list(prefix, Some("/")).await });
+        }
+        let mut subprefixes = Vec::new();
+        while let Some(found) = level.join_next().await {
+            subprefixes.extend(found??);
         }
         prefixes = subprefixes;
     }
@@ -308,7 +331,7 @@ struct Lister {
 struct Upload {
     key: String,
     upload_id: String,
-    storage_class: String,
+    storage_class: Cow<'static, str>,
     initiated: Option<u64>,
 }
 
@@ -392,7 +415,7 @@ impl Lister {
             let delete_markers = page.delete_markers().iter().map(|marker| Entry {
                 key: self.key(marker.key()),
                 size: 0,
-                storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
+                storage_class: DEFAULT_STORAGE_CLASS.into(),
                 kind: EntryKind::DeleteMarker,
                 last_modified: unix_seconds(marker.last_modified()),
             });
@@ -688,8 +711,8 @@ fn unix_seconds(time: Option<&DateTime>) -> Option<u64> {
     time.and_then(|time| u64::try_from(time.secs()).ok())
 }
 
-fn storage_class(class: Option<&str>) -> String {
-    class.unwrap_or(DEFAULT_STORAGE_CLASS).to_owned()
+fn storage_class(class: Option<&str>) -> Cow<'static, str> {
+    class_name(class.unwrap_or(DEFAULT_STORAGE_CLASS), STORAGE_CLASSES)
 }
 
 #[cfg(test)]
@@ -700,7 +723,7 @@ mod tests {
         Entry {
             key: key.to_owned(),
             size: 1,
-            storage_class: DEFAULT_STORAGE_CLASS.to_owned(),
+            storage_class: DEFAULT_STORAGE_CLASS.into(),
             kind,
             last_modified: None,
         }

@@ -6,8 +6,6 @@ mod pricing;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_s3::Client;
@@ -18,7 +16,6 @@ use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::types::CommonPrefix;
 use clouddirstat_core::{Entry, EntryKind};
 use cloudwatch::Detail;
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 pub use cloudwatch::{BucketEstimate, Estimate, list_cost_usd};
@@ -26,6 +23,7 @@ pub use credentials::{AccessKey, CredentialSource};
 pub use location::S3Location;
 pub use pricing::S3Pricing;
 
+use crate::listing::{self, PrefixLister, ScanContext};
 use crate::scanner::class_name;
 use crate::{EntrySender, Error, Result, ScanOptions, ScanStats, SkippedBucket};
 
@@ -47,10 +45,6 @@ const STORAGE_CLASSES: &[&str] = &[
     "SNOW",
     "FSX_OPENZFS",
 ];
-const MAX_SPLIT_DEPTH: usize = 3;
-/// Buckets in progress at the same time in an all-buckets scan. They share the
-/// request slots, so a big bucket gets all of them once the small ones are done.
-const BUCKETS_AT_ONCE: usize = 16;
 
 /// Lists one bucket, or every bucket the credentials can see.
 pub struct S3Scanner {
@@ -70,7 +64,8 @@ struct Target {
 impl S3Scanner {
     /// Loads credentials and finds the region of each bucket to scan. For `s3://`
     /// (all buckets) this lists the buckets, which needs `s3:ListAllMyBuckets`.
-    /// `region` overrides region detection.
+    /// `region` is used instead of looking up a single bucket's region; for `s3://` it
+    /// applies only to buckets whose region `ListBuckets` doesn't report.
     pub async fn connect(
         location: &S3Location,
         credentials: &CredentialSource,
@@ -158,56 +153,42 @@ impl S3Scanner {
     }
 
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
-        let requests = Arc::new(AtomicU64::new(self.setup_requests));
-        let slots = Arc::new(Semaphore::new(options.concurrency.max(1)));
-        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let context = ScanContext::new(
+            options.concurrency,
+            sink,
+            self.setup_requests,
+            LIST_PRICE_PER_1000_USD,
+            Vec::new(),
+        );
         let lister = |target: &Target, key_prefix: String| Lister {
             client: target.client.clone(),
             bucket: target.bucket.clone(),
             key_prefix,
             include_versions: options.include_versions,
-            requests: Arc::clone(&requests),
-            slots: Arc::clone(&slots),
-            warnings: Arc::clone(&warnings),
-            sink: sink.clone(),
+            context: context.clone(),
         };
         let mut skipped = self.skipped.clone();
 
-        if !self.location.is_all_buckets() {
+        if self.location.is_all_buckets() {
+            // Collected before awaiting: holding the lazy iterator across `.await`
+            // would keep this future from being `Send`.
+            let scans: Vec<_> = self
+                .targets
+                .iter()
+                .map(|target| {
+                    let lister = lister(target, format!("{}/", target.bucket));
+                    let scan = scan_bucket(lister, String::new(), options.concurrency);
+                    (target.bucket.clone(), scan)
+                })
+                .collect();
+            listing::each_bucket(scans, &mut skipped).await?;
+        } else {
             for target in &self.targets {
                 let prefix = self.location.prefix.clone();
                 scan_bucket(lister(target, String::new()), prefix, options.concurrency).await?;
             }
-        } else {
-            let mut tasks = JoinSet::new();
-            for target in &self.targets {
-                if tasks.len() >= BUCKETS_AT_ONCE
-                    && let Some(finished) = tasks.join_next().await
-                {
-                    record_bucket_result(finished?, &mut skipped)?;
-                }
-                let lister = lister(target, format!("{}/", target.bucket));
-                let bucket = target.bucket.clone();
-                let concurrency = options.concurrency;
-                tasks.spawn(async move {
-                    (
-                        bucket,
-                        scan_bucket(lister, String::new(), concurrency).await,
-                    )
-                });
-            }
-            while let Some(finished) = tasks.join_next().await {
-                record_bucket_result(finished?, &mut skipped)?;
-            }
         }
-
-        let warnings = warnings.lock().map(|list| list.clone()).unwrap_or_default();
-        Ok(ScanStats {
-            list_requests: requests.load(Ordering::Relaxed),
-            list_price_per_1000_usd: LIST_PRICE_PER_1000_USD,
-            skipped_buckets: skipped,
-            warnings,
-        })
+        Ok(context.stats(skipped, LIST_PRICE_PER_1000_USD))
     }
 
     fn add_target(&mut self, clients: &mut RegionalClients, bucket: String, region: String) {
@@ -227,62 +208,9 @@ impl S3Scanner {
     }
 }
 
-/// In an all-buckets scan, a bucket that fails is skipped instead of ending the scan.
-/// Cancellation still stops everything.
-fn record_bucket_result(
-    (bucket, result): (String, Result<()>),
-    skipped: &mut Vec<SkippedBucket>,
-) -> Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(Error::Cancelled) => Err(Error::Cancelled),
-        Err(error) => {
-            skipped.push(SkippedBucket {
-                bucket,
-                reason: error.to_string(),
-            });
-            Ok(())
-        }
-    }
-}
-
-/// Lists everything under `prefix`: expands prefixes breadth-first until there are
-/// enough to keep `concurrency` requests busy, then lists each one fully in parallel.
-/// Incomplete multipart uploads under the prefix are listed last.
+/// Lists everything under `prefix`, then the incomplete multipart uploads there.
 async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Result<()> {
-    let concurrency = concurrency.max(1);
-
-    let mut prefixes = vec![prefix.clone()];
-    for _ in 0..MAX_SPLIT_DEPTH {
-        if prefixes.is_empty() || prefixes.len() >= concurrency {
-            break;
-        }
-        // Each level's prefixes are listed in parallel, within the shared slots.
-        let mut level = JoinSet::new();
-        for prefix in prefixes {
-            let lister = lister.clone();
-            level.spawn(async move { lister.list(prefix, Some("/")).await });
-        }
-        let mut subprefixes = Vec::new();
-        while let Some(found) = level.join_next().await {
-            subprefixes.extend(found??);
-        }
-        prefixes = subprefixes;
-    }
-
-    let mut tasks = JoinSet::new();
-    for prefix in prefixes {
-        if tasks.len() >= concurrency
-            && let Some(finished) = tasks.join_next().await
-        {
-            finished??;
-        }
-        let lister = lister.clone();
-        tasks.spawn(async move { lister.list(prefix, None).await.map(drop) });
-    }
-    while let Some(finished) = tasks.join_next().await {
-        finished??;
-    }
+    listing::list_prefix(lister.clone(), prefix.clone(), concurrency).await?;
     lister.list_incomplete_uploads(prefix).await
 }
 
@@ -321,11 +249,7 @@ struct Lister {
     /// top-level folders.
     key_prefix: String,
     include_versions: bool,
-    requests: Arc<AtomicU64>,
-    /// Shared by every bucket in a scan: one slot per listing in progress.
-    slots: Arc<Semaphore>,
-    warnings: Arc<Mutex<Vec<String>>>,
-    sink: EntrySender,
+    context: ScanContext,
 }
 
 struct Upload {
@@ -335,16 +259,19 @@ struct Upload {
     initiated: Option<u64>,
 }
 
-impl Lister {
-    async fn list(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
-        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+impl PrefixLister for Lister {
+    async fn list(&self, prefix: String, split: bool) -> Result<Vec<String>> {
+        let _slot = self.context.slot().await?;
+        let delimiter = split.then_some("/");
         if self.include_versions {
             self.list_versions(prefix, delimiter).await
         } else {
             self.list_objects(prefix, delimiter).await
         }
     }
+}
 
+impl Lister {
     async fn list_objects(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
         let mut pages = self
             .client
@@ -359,7 +286,7 @@ impl Lister {
         while let Some(page) = pages.next().await {
             let page =
                 page.map_err(|error| request_error("ListObjectsV2", "s3:ListBucket", error))?;
-            self.requests.fetch_add(1, Ordering::Relaxed);
+            self.context.count_request(LIST_PRICE_PER_1000_USD);
 
             let entries = page
                 .contents()
@@ -374,7 +301,7 @@ impl Lister {
                     last_modified: unix_seconds(object.last_modified()),
                 })
                 .collect();
-            self.send(entries).await?;
+            self.context.send(entries).await?;
             subprefixes.extend(prefix_names(page.common_prefixes()));
         }
         Ok(subprefixes)
@@ -399,7 +326,7 @@ impl Lister {
                 .map_err(|error| {
                     request_error("ListObjectVersions", "s3:ListBucketVersions", error)
                 })?;
-            self.requests.fetch_add(1, Ordering::Relaxed);
+            self.context.count_request(LIST_PRICE_PER_1000_USD);
 
             let versions = page.versions().iter().map(|version| Entry {
                 key: self.key(version.key()),
@@ -419,7 +346,9 @@ impl Lister {
                 kind: EntryKind::DeleteMarker,
                 last_modified: unix_seconds(marker.last_modified()),
             });
-            self.send(merge_by_key(versions, delete_markers)).await?;
+            self.context
+                .send(merge_by_key(versions, delete_markers))
+                .await?;
             subprefixes.extend(prefix_names(page.common_prefixes()));
 
             if !page.is_truncated().unwrap_or(false) {
@@ -437,7 +366,7 @@ impl Lister {
             Ok(uploads) => uploads,
             Err(Error::Cancelled) => return Err(Error::Cancelled),
             Err(error) => {
-                self.warn(format!(
+                self.context.warn(format!(
                     "{}: incomplete uploads not checked. {error}",
                     self.bucket
                 ));
@@ -475,19 +404,19 @@ impl Lister {
             });
         }
         if let Some(error) = unknown_sizes {
-            self.warn(format!(
+            self.context.warn(format!(
                 "{}: sizes of incomplete uploads unknown. {error}",
                 self.bucket
             ));
         }
         for batch in entries.chunks(1000) {
-            self.send(batch.to_vec()).await?;
+            self.context.send(batch.to_vec()).await?;
         }
         Ok(())
     }
 
     async fn find_uploads(&self, prefix: String) -> Result<Vec<Upload>> {
-        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+        let _slot = self.context.slot().await?;
         let mut uploads = Vec::new();
         let mut key_marker = None;
         let mut upload_id_marker = None;
@@ -508,7 +437,7 @@ impl Lister {
                         error,
                     )
                 })?;
-            self.requests.fetch_add(1, Ordering::Relaxed);
+            self.context.count_request(LIST_PRICE_PER_1000_USD);
 
             uploads.extend(page.uploads().iter().filter_map(|upload| {
                 Some(Upload {
@@ -531,7 +460,7 @@ impl Lister {
 
     /// The billed size of an upload: the sum of the parts uploaded so far.
     async fn uploaded_bytes(&self, upload: &Upload) -> Result<u64> {
-        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+        let _slot = self.context.slot().await?;
         let mut pages = self
             .client
             .list_parts()
@@ -545,7 +474,7 @@ impl Lister {
             let page = page.map_err(|error| {
                 request_error("ListParts", "s3:ListMultipartUploadParts", error)
             })?;
-            self.requests.fetch_add(1, Ordering::Relaxed);
+            self.context.count_request(LIST_PRICE_PER_1000_USD);
             bytes += page
                 .parts()
                 .iter()
@@ -555,21 +484,8 @@ impl Lister {
         Ok(bytes)
     }
 
-    fn warn(&self, warning: String) {
-        if let Ok(mut warnings) = self.warnings.lock() {
-            warnings.push(warning);
-        }
-    }
-
     fn key(&self, key: Option<&str>) -> String {
         format!("{}{}", self.key_prefix, key.unwrap_or_default())
-    }
-
-    async fn send(&self, entries: Vec<Entry>) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-        self.sink.send(entries).await.map_err(|_| Error::Cancelled)
     }
 }
 

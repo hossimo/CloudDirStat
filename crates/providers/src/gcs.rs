@@ -6,13 +6,11 @@ mod prices;
 mod pricing;
 
 use std::collections::{BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clouddirstat_core::{Entry, EntryKind};
 use serde::Deserialize;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 
 pub use auth::GcsCredentials;
 pub use location::GcsLocation;
@@ -20,14 +18,12 @@ pub use pricing::{BucketPlacement, GcsPricing};
 
 use self::auth::TokenSource;
 use crate::http::{Http, Response, encode};
+use crate::listing::{self, PrefixLister, ScanContext};
 use crate::time::rfc3339_seconds;
-use crate::{EntrySender, Error, Result, ScanOptions, ScanStats, SkippedBucket};
+use crate::{EntrySender, Error, Result, ScanOptions, ScanStats};
 
 const API: &str = "https://storage.googleapis.com/storage/v1";
 const DEFAULT_STORAGE_CLASS: &str = "STANDARD";
-const MAX_SPLIT_DEPTH: usize = 3;
-/// Buckets in progress at the same time in an all-buckets scan.
-const BUCKETS_AT_ONCE: usize = 16;
 /// Only the fields the tree needs, which keeps listing responses small.
 const OBJECT_FIELDS: &str =
     "nextPageToken,prefixes,items(name,size,storageClass,updated,timeDeleted)";
@@ -164,10 +160,13 @@ impl GcsScanner {
     }
 
     pub async fn scan(&self, options: &ScanOptions, sink: EntrySender) -> Result<ScanStats> {
-        let requests = Arc::new(AtomicU64::new(self.setup_requests));
-        let cost = Arc::new(AtomicU64::new(0));
-        let slots = Arc::new(Semaphore::new(options.concurrency.max(1)));
-        let warnings = Arc::new(Mutex::new(self.warnings.clone()));
+        let context = ScanContext::new(
+            options.concurrency,
+            sink,
+            self.setup_requests,
+            0.0,
+            self.warnings.clone(),
+        );
         let lister = |target: &Target, key_prefix: String| Lister {
             http: self.http.clone(),
             auth: Arc::clone(&self.auth),
@@ -177,55 +176,32 @@ impl GcsScanner {
             include_versions: options.include_versions,
             soft_deleted_off: Arc::new(AtomicBool::new(false)),
             list_price_per_1000: GcsPricing::list_price_per_1000(&target.default_class),
-            requests: Arc::clone(&requests),
-            cost_nanodollars: Arc::clone(&cost),
-            slots: Arc::clone(&slots),
-            warnings: Arc::clone(&warnings),
-            sink: sink.clone(),
+            context: context.clone(),
         };
 
         let mut skipped = Vec::new();
-        if !self.location.is_all_buckets() {
-            for target in &self.targets {
-                let prefix = self.location.prefix.clone();
-                scan_bucket(lister(target, String::new()), prefix, options.concurrency).await?;
-            }
+        if self.location.is_all_buckets() {
+            // Collected before awaiting: holding the lazy iterator across `.await`
+            // would keep this future from being `Send`.
+            let scans: Vec<_> = self
+                .targets
+                .iter()
+                .map(|target| {
+                    let lister = lister(target, format!("{}/", target.bucket));
+                    let scan = listing::list_prefix(lister, String::new(), options.concurrency);
+                    (target.bucket.clone(), scan)
+                })
+                .collect();
+            listing::each_bucket(scans, &mut skipped).await?;
         } else {
-            let mut tasks = JoinSet::new();
             for target in &self.targets {
-                if tasks.len() >= BUCKETS_AT_ONCE
-                    && let Some(finished) = tasks.join_next().await
-                {
-                    record_bucket_result(finished?, &mut skipped)?;
-                }
-                let lister = lister(target, format!("{}/", target.bucket));
-                let bucket = target.bucket.clone();
-                let concurrency = options.concurrency;
-                tasks.spawn(async move {
-                    (
-                        bucket,
-                        scan_bucket(lister, String::new(), concurrency).await,
-                    )
-                });
-            }
-            while let Some(finished) = tasks.join_next().await {
-                record_bucket_result(finished?, &mut skipped)?;
+                let lister = lister(target, String::new());
+                let prefix = self.location.prefix.clone();
+                listing::list_prefix(lister, prefix, options.concurrency).await?;
             }
         }
-
-        let list_requests = requests.load(Ordering::Relaxed);
-        let cost_usd = cost.load(Ordering::Relaxed) as f64 / 1e9;
-        let warnings = warnings.lock().map(|list| list.clone()).unwrap_or_default();
-        Ok(ScanStats {
-            list_requests,
-            list_price_per_1000_usd: if list_requests == 0 {
-                GcsPricing::list_price_per_1000(DEFAULT_STORAGE_CLASS)
-            } else {
-                cost_usd * 1000.0 / list_requests as f64
-            },
-            skipped_buckets: skipped,
-            warnings,
-        })
+        let default_price = GcsPricing::list_price_per_1000(DEFAULT_STORAGE_CLASS);
+        Ok(context.stats(skipped, default_price))
     }
 
     /// One bucket's location and default class. Without `storage.buckets.get` the scan
@@ -312,62 +288,6 @@ fn project(credentials: &GcsCredentials, auth: &TokenSource) -> Result<String> {
         .ok_or(Error::NoProject)
 }
 
-fn record_bucket_result(
-    (bucket, result): (String, Result<()>),
-    skipped: &mut Vec<SkippedBucket>,
-) -> Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(Error::Cancelled) => Err(Error::Cancelled),
-        Err(error) => {
-            skipped.push(SkippedBucket {
-                bucket,
-                reason: error.to_string(),
-            });
-            Ok(())
-        }
-    }
-}
-
-/// Lists everything under `prefix`: expands prefixes breadth-first until there are
-/// enough to keep `concurrency` requests busy, then lists each one fully in parallel.
-async fn scan_bucket(lister: Lister, prefix: String, concurrency: usize) -> Result<()> {
-    let concurrency = concurrency.max(1);
-
-    let mut prefixes = vec![prefix.clone()];
-    for _ in 0..MAX_SPLIT_DEPTH {
-        if prefixes.is_empty() || prefixes.len() >= concurrency {
-            break;
-        }
-        // Each level's prefixes are listed in parallel, within the shared slots.
-        let mut level = JoinSet::new();
-        for prefix in prefixes {
-            let lister = lister.clone();
-            level.spawn(async move { lister.list(prefix, Some("/")).await });
-        }
-        let mut subprefixes = Vec::new();
-        while let Some(found) = level.join_next().await {
-            subprefixes.extend(found??);
-        }
-        prefixes = subprefixes;
-    }
-
-    let mut tasks = JoinSet::new();
-    for prefix in prefixes {
-        if tasks.len() >= concurrency
-            && let Some(finished) = tasks.join_next().await
-        {
-            finished??;
-        }
-        let lister = lister.clone();
-        tasks.spawn(async move { lister.list(prefix, None).await.map(drop) });
-    }
-    while let Some(finished) = tasks.join_next().await {
-        finished??;
-    }
-    Ok(())
-}
-
 #[derive(Clone)]
 struct Lister {
     http: Http,
@@ -381,24 +301,17 @@ struct Lister {
     /// of permission), so the rest is listed without them and warned about once.
     soft_deleted_off: Arc<AtomicBool>,
     list_price_per_1000: f64,
-    requests: Arc<AtomicU64>,
-    cost_nanodollars: Arc<AtomicU64>,
-    slots: Arc<Semaphore>,
-    warnings: Arc<Mutex<Vec<String>>>,
-    sink: EntrySender,
+    context: ScanContext,
 }
 
-impl Lister {
-    /// Lists objects under `prefix`, sending them to the tree, and returns the
-    /// subprefixes when `delimiter` is given.
-    ///
+impl PrefixLister for Lister {
     /// With versions, soft-deleted objects (billed until their retention ends) come
     /// from a second listing of the same prefix. Both are sorted by name, so they are
     /// merged as they arrive: every version of a name reaches the tree together, which
     /// is how it recognizes them as one object. The two listings share one slot, so with
     /// versions a slot can have two requests in flight.
-    async fn list(&self, prefix: String, delimiter: Option<&str>) -> Result<Vec<String>> {
-        let _slot = self.slots.acquire().await.map_err(|_| Error::Cancelled)?;
+    async fn list(&self, prefix: String, split: bool) -> Result<Vec<String>> {
+        let _slot = self.context.slot().await?;
         let mut live = Pages::new(prefix.clone(), false);
         let mut deleted = (self.include_versions && !self.soft_deleted_off.load(Ordering::Relaxed))
             .then(|| Pages::new(prefix, true));
@@ -407,14 +320,14 @@ impl Lister {
             // The two listings' next pages are fetched at the same time.
             let live_page = async {
                 if live.wants_page() {
-                    self.next_page(&mut live, delimiter).await
+                    self.next_page(&mut live, split).await
                 } else {
                     Ok(Vec::new())
                 }
             };
             let deleted_page = async {
                 match deleted.as_mut().filter(|pages| pages.wants_page()) {
-                    Some(pages) => Some(self.next_page(pages, delimiter).await),
+                    Some(pages) => Some(self.next_page(pages, split).await),
                     None => None,
                 }
             };
@@ -434,28 +347,25 @@ impl Lister {
             while let Some((object, soft_deleted)) = next_by_name(&mut live, deleted.as_mut()) {
                 entries.push(self.entry(object, soft_deleted));
             }
-            if !entries.is_empty() {
-                self.sink
-                    .send(entries)
-                    .await
-                    .map_err(|_| Error::Cancelled)?;
-            }
+            self.context.send(entries).await?;
             if live.is_finished() && deleted.as_ref().is_none_or(Pages::is_finished) {
                 return Ok(subprefixes.into_iter().collect());
             }
         }
     }
+}
 
+impl Lister {
     /// Fetches the next page of `pages` into its buffer and returns its subprefixes.
-    async fn next_page(&self, pages: &mut Pages, delimiter: Option<&str>) -> Result<Vec<String>> {
+    async fn next_page(&self, pages: &mut Pages, split: bool) -> Result<Vec<String>> {
         let mut url = format!(
             "{API}/b/{}/o?prefix={}&maxResults=1000&fields={}",
             encode(&self.bucket),
             encode(&pages.prefix),
             encode(OBJECT_FIELDS)
         );
-        if let Some(delimiter) = delimiter {
-            url.push_str(&format!("&delimiter={}", encode(delimiter)));
+        if split {
+            url.push_str("&delimiter=%2F");
         }
         // The API does not allow both at once.
         if pages.soft_deleted {
@@ -473,7 +383,9 @@ impl Lister {
             .http
             .get(&url, &[("authorization", &authorization)])
             .await?;
-        self.count_request();
+        // Listing soft-deleted objects is a cheaper Class B operation, but is counted
+        // at the Class A price with the rest, so the scan cost errs high.
+        self.context.count_request(self.list_price_per_1000);
         match response.status.as_u16() {
             200 => {}
             401 => return Err(rejected(&response)),
@@ -490,7 +402,7 @@ impl Lister {
 
     fn soft_deleted_failed(&self, error: &Error) {
         if !self.soft_deleted_off.swap(true, Ordering::Relaxed) {
-            self.warn(format!(
+            self.context.warn(format!(
                 "{}: soft-deleted objects not checked. {error}",
                 self.bucket
             ));
@@ -512,21 +424,6 @@ impl Lister {
                 EntryKind::Current
             },
             last_modified: object.updated.as_deref().and_then(rfc3339_seconds),
-        }
-    }
-
-    /// Listing soft-deleted objects is a cheaper Class B operation, but is counted at
-    /// the Class A price with the rest, so the scan cost errs high.
-    fn count_request(&self) {
-        self.requests.fetch_add(1, Ordering::Relaxed);
-        let nanodollars = (self.list_price_per_1000 * 1e6).round() as u64;
-        self.cost_nanodollars
-            .fetch_add(nanodollars, Ordering::Relaxed);
-    }
-
-    fn warn(&self, warning: String) {
-        if let Ok(mut warnings) = self.warnings.lock() {
-            warnings.push(warning);
         }
     }
 }

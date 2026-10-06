@@ -52,7 +52,8 @@ struct TargetArgs {
     #[arg(long)]
     profile: Option<String>,
 
-    /// Bucket region; looked up automatically when omitted
+    /// Bucket region; looked up automatically when omitted. With s3://, used only for
+    /// buckets whose region isn't listed
     #[arg(long)]
     region: Option<String>,
 

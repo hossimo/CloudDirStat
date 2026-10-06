@@ -64,12 +64,15 @@ fn layout_children(
     }
 
     let scale = f64::from(rect.area()) / parent_bytes as f64;
-    let areas: Vec<(NodeId, f32)> = view
-        .children_by_size(parent)
-        .into_iter()
+    // Drop children too small to draw before sorting, so a folder with millions of
+    // tiny objects costs one pass instead of a full sort.
+    let mut areas: Vec<(NodeId, f32)> = view
+        .tree
+        .children(parent)
         .map(|child| (child, (view.usage(child).bytes as f64 * scale) as f32))
-        .take_while(|&(_, area)| area > 0.0 && area >= min_area)
+        .filter(|&(_, area)| area > 0.0 && area >= min_area)
         .collect();
+    areas.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     let mut remaining = rect;
     let mut start = 0;
@@ -293,6 +296,19 @@ mod tests {
 
         let paths: Vec<_> = layout.iter().map(|&(id, _)| tree.path(id)).collect();
         assert_eq!(paths, ["", "big"]);
+    }
+
+    #[test]
+    fn many_tiny_siblings_leave_the_large_ones_largest_first() {
+        let mut files = vec![("small", 2_000), ("large", 5_000), ("medium", 3_000)];
+        let names: Vec<String> = (0..1000).map(|i| format!("tiny{i}")).collect();
+        files.extend(names.iter().map(|name| (name.as_str(), 1)));
+        let tree = tree_of(&files);
+
+        let layout = squarify(&tree, Tree::ROOT, Rect::new(0.0, 0.0, 100.0, 100.0), 4.0);
+
+        let paths: Vec<_> = layout.iter().map(|&(id, _)| tree.path(id)).collect();
+        assert_eq!(paths, ["", "large", "medium", "small"]);
     }
 
     #[test]

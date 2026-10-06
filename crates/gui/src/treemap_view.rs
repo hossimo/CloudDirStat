@@ -14,6 +14,11 @@ use crate::palette::{self, Colors};
 const MIN_AREA: f32 = 1.5;
 /// Redraw at most this often while the window is being resized.
 const REDRAW_INTERVAL: Duration = Duration::from_millis(150);
+/// While a scan is adding objects, redraw at most this often...
+const SCANNING_REDRAW_INTERVAL: Duration = Duration::from_secs(1);
+/// ...and wait at least this many times as long as the last redraw took, so the
+/// treemap never takes more than a small share of the time the tree is built in.
+const SCANNING_REDRAW_FACTOR: u32 = 10;
 /// What the user did in the treemap.
 pub enum Action {
     Select(NodeId),
@@ -30,6 +35,8 @@ pub struct TreemapView {
     texture: Option<TextureHandle>,
     drawn_for: Option<(egui::Rect, NodeId)>,
     drawn_at: Option<Instant>,
+    /// How long the last redraw took.
+    redraw_time: Duration,
     stale: bool,
 }
 
@@ -40,6 +47,7 @@ impl TreemapView {
     }
 
     /// Draws the treemap with `root` filling it, and returns what the user did.
+    /// While `scanning`, a tree that keeps changing is redrawn only now and then.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -47,19 +55,23 @@ impl TreemapView {
         root: NodeId,
         colors: &Colors,
         selected: Option<NodeId>,
+        scanning: bool,
     ) -> Option<Action> {
         let tree = view.tree;
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
         let bounds = response.rect;
 
+        // Zooming redraws at once; the user is waiting for it.
+        let zoomed = self
+            .drawn_for
+            .is_none_or(|(_, drawn_root)| drawn_root != root);
         if self.stale || self.drawn_for != Some((bounds, root)) {
-            let due = self
-                .drawn_at
-                .is_none_or(|at| at.elapsed() >= REDRAW_INTERVAL);
-            if due || self.texture.is_none() {
+            let interval = self.redraw_interval(scanning);
+            let due = self.drawn_at.is_none_or(|at| at.elapsed() >= interval);
+            if due || zoomed || self.texture.is_none() {
                 self.redraw(ui.ctx(), view, root, colors, bounds);
             } else {
-                ui.ctx().request_repaint_after(REDRAW_INTERVAL);
+                ui.ctx().request_repaint_after(interval);
             }
         }
 
@@ -101,6 +113,14 @@ impl TreemapView {
         action
     }
 
+    fn redraw_interval(&self, scanning: bool) -> Duration {
+        if scanning {
+            SCANNING_REDRAW_INTERVAL.max(self.redraw_time * SCANNING_REDRAW_FACTOR)
+        } else {
+            REDRAW_INTERVAL
+        }
+    }
+
     fn redraw(
         &mut self,
         ctx: &egui::Context,
@@ -109,6 +129,7 @@ impl TreemapView {
         colors: &Colors,
         bounds: egui::Rect,
     ) {
+        let started = Instant::now();
         let tree = view.tree;
         let pixels_per_point = ctx.pixels_per_point();
         let width = (bounds.width() * pixels_per_point).round().max(1.0);
@@ -137,6 +158,7 @@ impl TreemapView {
             .collect();
         self.drawn_for = Some((bounds, root));
         self.drawn_at = Some(Instant::now());
+        self.redraw_time = started.elapsed();
         self.stale = false;
     }
 

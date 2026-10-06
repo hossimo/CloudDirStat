@@ -436,8 +436,8 @@ impl eframe::App for App {
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| input.key_pressed(egui::Key::Escape));
 
-        // Nothing to draw after a scan that failed or found nothing.
-        if !scan.is_running() && tree.total().objects > 0 {
+        // Nothing to draw until the scan finds something.
+        if tree.total().objects > 0 {
             let available = ui.available_height();
             egui::Panel::bottom("treemap")
                 .resizable(true)
@@ -461,10 +461,14 @@ impl eframe::App for App {
                         });
                         return;
                     }
-                    match view
-                        .treemap
-                        .show(ui, filtered, map_root, colors, view.selected)
-                    {
+                    match view.treemap.show(
+                        ui,
+                        filtered,
+                        map_root,
+                        colors,
+                        view.selected,
+                        scan.is_running(),
+                    ) {
                         Some(treemap_view::Action::Select(clicked)) => {
                             view.selected = Some(clicked);
                             view.tree_view.reveal(tree, clicked);

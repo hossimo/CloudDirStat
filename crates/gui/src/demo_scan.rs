@@ -64,7 +64,7 @@ pub async fn estimate(request: &ScanRequest) -> clouddirstat_providers::Result<E
                 .find(|(name, _)| *name == entry.storage_class)
             {
                 Some((_, bytes)) => *bytes += entry.size,
-                None => classes.push((entry.storage_class, entry.size)),
+                None => classes.push((entry.storage_class.into_owned(), entry.size)),
             }
         }
         let classes: Vec<(&str, u64)> = classes
@@ -187,7 +187,7 @@ fn as_listed_by(provider: Provider, mut entry: Entry) -> Option<Entry> {
     ) {
         return None;
     }
-    let temperature = match entry.storage_class.as_str() {
+    let temperature = match entry.storage_class.as_ref() {
         "STANDARD_IA" | "ONEZONE_IA" => 1,
         "GLACIER_IR" => 2,
         "GLACIER" | "DEEP_ARCHIVE" => 3,
@@ -197,7 +197,7 @@ fn as_listed_by(provider: Provider, mut entry: Entry) -> Option<Entry> {
         Provider::Gcs => ["STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE"],
         _ => ["Hot", "Cool", "Cold", "Archive"],
     };
-    entry.storage_class = classes[temperature].to_owned();
+    entry.storage_class = classes[temperature].into();
     Some(entry)
 }
 

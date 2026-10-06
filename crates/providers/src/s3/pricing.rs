@@ -156,7 +156,7 @@ impl Pricing for S3Pricing {
         }
         let size = entry.size;
         let prices = self.prices_for(&entry.key);
-        let class = entry.storage_class.as_str();
+        let class = entry.storage_class.as_ref();
         let rate = self.rate(prices, class);
         let per_gb = |bytes: u64| bytes as f64 / BYTES_PER_GB * rate;
 
@@ -196,7 +196,7 @@ mod tests {
             .monthly_cost(&Entry {
                 key: "k".to_owned(),
                 size,
-                storage_class: class.to_owned(),
+                storage_class: class.to_owned().into(),
                 kind: EntryKind::Current,
                 last_modified: None,
             })
@@ -237,7 +237,7 @@ mod tests {
         let marker = Entry {
             key: "k".to_owned(),
             size: 0,
-            storage_class: "STANDARD".to_owned(),
+            storage_class: "STANDARD".into(),
             kind: EntryKind::DeleteMarker,
             last_modified: None,
         };
@@ -262,7 +262,7 @@ mod tests {
                 .monthly_cost(&Entry {
                     key: key.to_owned(),
                     size: GB,
-                    storage_class: "STANDARD".to_owned(),
+                    storage_class: "STANDARD".into(),
                     kind: EntryKind::Current,
                     last_modified: None,
                 })

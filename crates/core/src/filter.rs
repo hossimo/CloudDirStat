@@ -181,7 +181,7 @@ mod tests {
             tree.insert(&Entry {
                 key: key.to_owned(),
                 size,
-                storage_class: class.to_owned(),
+                storage_class: class.to_owned().into(),
                 kind: EntryKind::Current,
                 // Bigger files are newer, so the dates show which objects were kept.
                 last_modified: Some(size * 86_400),

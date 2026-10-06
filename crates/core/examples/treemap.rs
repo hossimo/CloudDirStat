@@ -29,7 +29,7 @@ fn main() {
         tree.insert(&Entry {
             key: format!("acme-flat/thumbnails/{index:08}.jpg"),
             size: 20_000,
-            storage_class: "STANDARD".to_owned(),
+            storage_class: "STANDARD".into(),
             kind: EntryKind::Current,
             last_modified: None,
         });

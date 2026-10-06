@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use clouddirstat_core::{Entry, Pricing};
@@ -123,4 +124,27 @@ impl Scanner {
 
 fn no_estimates() -> Error {
     Error::Unsupported("estimates are only available for Amazon S3 so far".to_owned())
+}
+
+/// A storage class name, borrowed from the provider's `known` names when it is one, so
+/// that most listed objects don't allocate a copy of it.
+pub(crate) fn class_name(name: &str, known: &'static [&'static str]) -> Cow<'static, str> {
+    match known.iter().find(|&&class| class == name) {
+        Some(&class) => Cow::Borrowed(class),
+        None => Cow::Owned(name.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_class_names_are_borrowed() {
+        assert!(matches!(
+            class_name("COLD", &["HOT", "COLD"]),
+            Cow::Borrowed("COLD")
+        ));
+        assert!(matches!(class_name("NEW", &["HOT"]), Cow::Owned(name) if name == "NEW"));
+    }
 }

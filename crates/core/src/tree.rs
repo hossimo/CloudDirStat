@@ -600,7 +600,7 @@ mod tests {
         Entry {
             key: key.to_owned(),
             size,
-            storage_class: "STANDARD".to_owned(),
+            storage_class: "STANDARD".into(),
             kind: EntryKind::Current,
             last_modified: None,
         }
@@ -667,13 +667,13 @@ mod tests {
     fn objects_keep_the_storage_class_of_their_current_version() {
         let mut tree = Tree::new();
         tree.insert(&Entry {
-            storage_class: "GLACIER".to_owned(),
+            storage_class: "GLACIER".into(),
             kind: EntryKind::Noncurrent,
             ..entry("a/old.bin", 5)
         });
         tree.insert(&entry("a/old.bin", 5));
         tree.insert(&Entry {
-            storage_class: "GLACIER".to_owned(),
+            storage_class: "GLACIER".into(),
             kind: EntryKind::Noncurrent,
             ..entry("b.bin", 1)
         });
@@ -935,7 +935,7 @@ mod tests {
         let mut tree = Tree::new();
         tree.insert(&entry("a", 5));
         tree.insert(&Entry {
-            storage_class: "GLACIER".to_owned(),
+            storage_class: "GLACIER".into(),
             ..entry("b", 50)
         });
 

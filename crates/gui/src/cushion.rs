@@ -118,7 +118,7 @@ mod tests {
             tree.insert(&Entry {
                 key: key.to_owned(),
                 size,
-                storage_class: "STANDARD".to_owned(),
+                storage_class: "STANDARD".into(),
                 kind: EntryKind::Current,
                 last_modified: None,
             });

@@ -35,25 +35,28 @@ impl Filter {
 
     /// The objects under `root` that pass this filter.
     pub fn subset(&self, tree: &Tree, root: NodeId) -> Subset {
+        Subset::new(tree, self.matcher(tree, root))
+    }
+
+    /// Whether an object under `root` passes this filter.
+    pub fn matcher<'a>(&'a self, tree: &'a Tree, root: NodeId) -> Box<dyn Fn(NodeId) -> bool + 'a> {
         match self {
             Self::StorageClass(class) => {
-                Subset::new(tree, |id| tree.storage_class(id) == Some(class.as_str()))
+                Box::new(move |id| tree.storage_class(id) == Some(class.as_str()))
             }
-            Self::VersionState(state) => {
-                Subset::new(tree, |id| tree.version_state(id) == Some(*state))
-            }
+            Self::VersionState(state) => Box::new(move |id| tree.version_state(id) == Some(*state)),
             Self::Prefix(prefix) => {
-                Subset::new(tree, |id| tree.child_toward(root, id) == Some(*prefix))
+                Box::new(move |id| tree.child_toward(root, id) == Some(*prefix))
             }
             Self::OtherPrefixes => {
                 let top: HashSet<NodeId> = palette::top_prefixes(tree, root).into_iter().collect();
-                Subset::new(tree, |id| {
+                Box::new(move |id| {
                     tree.child_toward(root, id)
                         .is_some_and(|outer| !top.contains(&outer))
                 })
             }
             Self::FileType(file_type) => {
-                Subset::new(tree, |id| tree.file_type(id) == Some(file_type.as_str()))
+                Box::new(move |id| tree.file_type(id) == Some(file_type.as_str()))
             }
             Self::OtherFileTypes => {
                 let listed: HashSet<&str> = tree
@@ -62,7 +65,7 @@ impl Filter {
                     .take(MAX_FILE_TYPE_ROWS)
                     .map(|(file_type, _)| file_type)
                     .collect();
-                Subset::new(tree, |id| {
+                Box::new(move |id| {
                     tree.file_type(id)
                         .is_some_and(|file_type| !listed.contains(file_type))
                 })

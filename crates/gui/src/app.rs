@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 
 use crate::cloud_picker::{self, Scheme};
 use crate::credentials_form::CredentialsForm;
-use crate::error_view;
+use crate::error_view::{self, Problem};
 use crate::estimate_view::{self, EstimateTask};
 use crate::filter::Filter;
 use crate::help::HelpWindow;
@@ -36,7 +36,9 @@ pub struct App {
     /// Set in Help; off by default.
     version_in_title: bool,
     include_versions: bool,
-    input_error: Option<String>,
+    input_error: Option<Problem>,
+    /// Whether the error window is open.
+    error_open: bool,
     scan: Option<Scan>,
     /// The Estimate window, while it is open.
     estimate: Option<EstimateTask>,
@@ -135,6 +137,7 @@ impl App {
             version_in_title: false,
             include_versions,
             input_error: None,
+            error_open: false,
             scan: None,
             estimate: None,
             view: View::new(ColorMode::StorageClass),
@@ -148,6 +151,7 @@ impl App {
 
     fn start_scan(&mut self, request: ScanRequest, ctx: &egui::Context) {
         self.input_error = None;
+        self.error_open = false;
         self.view = View::new(self.view.color_mode);
         self.scan = Some(Scan::start(&self.runtime, request, ctx));
     }
@@ -158,14 +162,14 @@ impl App {
         let location = match self.location_input.trim().parse::<Location>() {
             Ok(location) => location,
             Err(error) => {
-                self.input_error = Some(error.to_string());
+                self.input_error = Some(Problem::from_error(&error));
                 return None;
             }
         };
         let credentials = match self.credentials.credentials(location.provider()) {
             Ok(credentials) => credentials,
             Err(error) => {
-                self.input_error = Some(error);
+                self.input_error = Some(Problem::from_message(&error));
                 return None;
             }
         };
@@ -294,22 +298,56 @@ impl App {
         }
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui) {
+    /// The error being shown: a problem with the inputs, else a failed scan.
+    fn problem(&self) -> Option<&Problem> {
+        self.input_error.as_ref().or(match &self.scan {
+            Some(Scan {
+                state: ScanState::Failed(problem),
+                ..
+            }) => Some(problem),
+            _ => None,
+        })
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let mut details_clicked = false;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 zoom_indicator(ui);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    self.status_summary(ui);
-                });
+                ui.with_layout(
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| match self.problem() {
+                        Some(problem) => details_clicked = error_view::chip(ui, problem),
+                        None => self.status_summary(ui),
+                    },
+                );
             });
         });
+        self.error_open |= details_clicked;
+    }
+
+    fn error_window(&mut self, ctx: &egui::Context) {
+        if !self.error_open {
+            return;
+        }
+        let Some(problem) = self.problem().cloned() else {
+            self.error_open = false;
+            return;
+        };
+        match error_view::window(ctx, &problem, &mut self.error_open) {
+            Some(error_view::Action::Help) => self.help.open(),
+            Some(error_view::Action::ClearLocation) => {
+                self.location_input = self.provider().scheme().to_owned();
+                focus_at_end(ctx, &self.location_input);
+                if !self.is_scanning() {
+                    self.start_scan_from_inputs(ctx);
+                }
+            }
+            None => {}
+        }
     }
 
     fn status_summary(&self, ui: &mut egui::Ui) {
-        if let Some(error) = &self.input_error {
-            error_view::chip(ui, error);
-            return;
-        }
         let Some(scan) = &self.scan else {
             ui.label("Enter a location and press Scan.");
             return;
@@ -385,9 +423,8 @@ impl App {
                     format!("{summary}  ·  stopped after {elapsed:.1}s (partial)"),
                 );
             }
-            ScanState::Failed(error) => {
-                error_view::chip(ui, error);
-            }
+            // Shown by `status_bar` instead.
+            ScanState::Failed(_) => {}
         }
     }
 }
@@ -444,6 +481,7 @@ impl eframe::App for App {
                 .send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
         self.estimate_window(ui.ctx());
+        self.error_window(ui.ctx());
 
         let Some(scan) = &self.scan else {
             egui::CentralPanel::default().show(ui, |ui| {
@@ -451,17 +489,13 @@ impl eframe::App for App {
             });
             return;
         };
-        // A scan that failed before finding anything has nothing to show but the error,
-        // which gets the room the lists would have used.
-        if let ScanState::Failed(error) = &scan.state
+        // The error itself is in the status bar.
+        if let ScanState::Failed(_) = &scan.state
             && scan.tree.total().objects == 0
         {
-            let action = egui::CentralPanel::default()
-                .show(ui, |ui| error_view::card(ui, "Scan failed", error))
-                .inner;
-            if let Some(error_view::Action::Help) = action {
-                self.help.open();
-            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.centered_and_justified(|ui| ui.weak("Scan failed"));
+            });
             return;
         }
         let view = &mut self.view;

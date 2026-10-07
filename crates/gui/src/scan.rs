@@ -9,6 +9,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::error_view::Problem;
+
 #[derive(Clone)]
 pub struct ScanRequest {
     pub location: Location,
@@ -22,7 +24,7 @@ pub enum ScanState {
     Running,
     Finished { stats: ScanStats, elapsed: Duration },
     Stopped { elapsed: Duration },
-    Failed(String),
+    Failed(Problem),
 }
 
 /// A scan running on the tokio runtime, and the tree built from what it has sent so far.
@@ -169,10 +171,10 @@ impl Scan {
                     elapsed: self.started.elapsed(),
                 };
             }
-            Ok(Err(error)) => self.state = ScanState::Failed(error.to_string()),
+            Ok(Err(error)) => self.state = ScanState::Failed(Problem::from_error(&error)),
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => {
-                self.state = ScanState::Failed("the scan task ended unexpectedly".to_owned());
+                self.state = ScanState::Failed(Problem::new("The scan ended unexpectedly"));
             }
         }
     }

@@ -1,14 +1,13 @@
 //! The Estimate window: bucket totals and scan cost from CloudWatch, without listing.
 
 use clouddirstat_core::{format_bytes, format_count, format_counted, format_usd};
-use clouddirstat_providers::Error;
 use clouddirstat_providers::s3::{Estimate, S3Pricing, list_cost_usd};
 use eframe::egui::{self, Align, Label, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
-use crate::error_view;
+use crate::error_view::{self, Problem};
 use crate::palette;
 use crate::scan::ScanRequest;
 use crate::tree_view::right_aligned;
@@ -35,8 +34,7 @@ pub enum Action {
 enum State {
     Running,
     Done(Estimate),
-    /// The error, and whether it came from CloudWatch (rather than, say, S3).
-    Failed(String, bool),
+    Failed(Problem),
 }
 
 /// An estimate being fetched on the tokio runtime, or its result.
@@ -71,20 +69,10 @@ impl EstimateTask {
         }
         match self.receiver.try_recv() {
             Ok(Ok(estimate)) => self.state = State::Done(estimate),
-            Ok(Err(error)) => {
-                let cloudwatch = matches!(
-                    error,
-                    Error::Request {
-                        permission: "cloudwatch:GetMetricData",
-                        ..
-                    }
-                );
-                self.state = State::Failed(error.to_string(), cloudwatch);
-            }
+            Ok(Err(error)) => self.state = State::Failed(Problem::from_error(&error)),
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => {
-                let message = "the estimate task ended unexpectedly".to_owned();
-                self.state = State::Failed(message, false);
+                self.state = State::Failed(Problem::new("The estimate ended unexpectedly"));
             }
         }
     }
@@ -153,14 +141,8 @@ impl EstimateTask {
                 });
                 None
             }
-            State::Failed(error, cloudwatch) => {
-                error_view::block(ui, error);
-                if *cloudwatch {
-                    ui.weak(
-                        "Estimates read S3's daily storage metrics from CloudWatch, which \
-                         needs cloudwatch:GetMetricData (see Help).",
-                    );
-                }
+            State::Failed(problem) => {
+                error_view::block(ui, problem);
                 None
             }
             State::Done(estimate) => summary(ui, &self.request, estimate, table_height),

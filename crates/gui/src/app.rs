@@ -33,6 +33,8 @@ pub struct App {
     location_input: String,
     credentials: CredentialsForm,
     help: HelpWindow,
+    /// Set in Help; off by default.
+    version_in_title: bool,
     include_versions: bool,
     input_error: Option<String>,
     scan: Option<Scan>,
@@ -130,6 +132,7 @@ impl App {
             location_input: String::new(),
             credentials: CredentialsForm::new(profile),
             help: HelpWindow::default(),
+            version_in_title: false,
             include_versions,
             input_error: None,
             scan: None,
@@ -389,6 +392,14 @@ impl App {
     }
 }
 
+pub fn window_title(with_version: bool) -> String {
+    if with_version {
+        format!("CloudDirStat {}", clouddirstat_core::VERSION)
+    } else {
+        "CloudDirStat".to_owned()
+    }
+}
+
 /// The UI zoom (Ctrl + / Ctrl −) when it isn't 100%; clicking it goes back to 100%.
 fn zoom_indicator(ui: &mut egui::Ui) {
     let zoom = ui.ctx().zoom_factor();
@@ -425,7 +436,13 @@ impl eframe::App for App {
             .as_ref()
             .filter(|location| location.provider() == Provider::S3)
             .map(|location| location.bucket().unwrap_or("*"));
-        self.help.show(ui.ctx(), bucket);
+        let version_in_title = self.version_in_title;
+        self.help.show(ui.ctx(), bucket, &mut self.version_in_title);
+        if self.version_in_title != version_in_title {
+            let title = window_title(self.version_in_title);
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         self.estimate_window(ui.ctx());
 
         let Some(scan) = &self.scan else {

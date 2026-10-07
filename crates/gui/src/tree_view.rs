@@ -174,10 +174,10 @@ impl TreeView {
                     }
                     if node.kind() == NodeKind::Directory {
                         if response.double_clicked() {
-                            toggled = Some(row.id);
+                            zoom = Some(row.id);
                         }
                         response.context_menu(|ui| {
-                            if ui.button("Zoom treemap here").clicked() {
+                            if ui.button("Zoom treemap here (double-click)").clicked() {
                                 zoom = Some(row.id);
                                 ui.close();
                             }

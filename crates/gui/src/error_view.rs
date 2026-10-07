@@ -129,7 +129,7 @@ fn is_denied(message: &str) -> bool {
 /// What the user did in the error window.
 pub enum Action {
     Help,
-    /// Empty the Location field down to its scheme (e.g. `s3://`).
+    /// Empty the Location field down to its scheme (e.g. `s3://`) and scan that.
     ClearLocation,
 }
 
@@ -255,7 +255,10 @@ fn buttons(ui: &mut egui::Ui, problem: &Problem, open: &mut bool) -> Option<Acti
             }
             if ui
                 .button("Clear location")
-                .on_hover_text("Empty the Location field, keeping s3://, gs://, or az://")
+                .on_hover_text(
+                    "Empty the Location field down to s3://, gs://, or az:// and scan \
+                     everything there",
+                )
                 .clicked()
             {
                 action = Some(Action::ClearLocation);

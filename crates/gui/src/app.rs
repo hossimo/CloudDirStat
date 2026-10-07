@@ -339,6 +339,9 @@ impl App {
             Some(error_view::Action::ClearLocation) => {
                 self.location_input = self.provider().scheme().to_owned();
                 focus_at_end(ctx, &self.location_input);
+                if !self.is_scanning() {
+                    self.start_scan_from_inputs(ctx);
+                }
             }
             None => {}
         }

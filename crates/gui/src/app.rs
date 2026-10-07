@@ -63,6 +63,8 @@ struct View {
     selected: Option<NodeId>,
     /// The folder the treemap is zoomed into; `None` shows the whole scan.
     zoom: Option<NodeId>,
+    /// The legend row under the pointer, highlighted in the treemap.
+    hovered: Option<Filter>,
     list: ListTab,
     tree_view: TreeView,
     largest: LargestFiles,
@@ -80,6 +82,7 @@ impl View {
             subset: None,
             selected: None,
             zoom: None,
+            hovered: None,
             list: ListTab::Folders,
             tree_view: TreeView::default(),
             largest: LargestFiles::default(),
@@ -544,6 +547,8 @@ impl eframe::App for App {
                         colors,
                         view.selected,
                         scan.is_running(),
+                        view.hovered.as_ref(),
+                        root,
                     ) {
                         Some(treemap_view::Action::Select(clicked)) => {
                             view.selected = Some(clicked);
@@ -567,7 +572,7 @@ impl eframe::App for App {
             // first frames and push the folder list's last columns out of view.
             .default_size(LEGEND_WIDTH)
             .show(ui, |ui| {
-                let clicked = legend::show(
+                let legend = legend::show(
                     ui,
                     tree,
                     root,
@@ -576,11 +581,16 @@ impl eframe::App for App {
                     scan,
                     view.filter.as_ref(),
                 );
-                if let Some(Filter::Prefix(prefix)) = clicked {
+                if let Some(Filter::Prefix(prefix)) = legend.clicked {
                     view.selected = Some(prefix);
                     view.tree_view.reveal(tree, prefix);
                 }
-                new_filter = clicked;
+                new_filter = legend.clicked;
+                // The treemap was drawn before the legend, so it catches up next frame.
+                if legend.hovered != view.hovered {
+                    view.hovered = legend.hovered;
+                    ui.ctx().request_repaint();
+                }
             });
 
         egui::CentralPanel::default().show(ui, |ui| {

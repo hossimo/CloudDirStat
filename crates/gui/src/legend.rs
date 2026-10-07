@@ -17,8 +17,16 @@ struct LegendRow {
     filter: Option<Filter>,
 }
 
+/// The rows the pointer clicked and is over, as filters.
+#[derive(Default)]
+pub struct Interaction {
+    pub clicked: Option<Filter>,
+    /// Highlighted in the treemap.
+    pub hovered: Option<Filter>,
+}
+
 /// The right-hand panel: tabs pick what the treemap is colored by, and the list
-/// below explains the colors. Returns the filter of the row the user clicked, if any.
+/// below explains the colors.
 pub fn show(
     ui: &mut egui::Ui,
     tree: &Tree,
@@ -27,7 +35,7 @@ pub fn show(
     colors: &Colors,
     scan: &Scan,
     active: Option<&Filter>,
-) -> Option<Filter> {
+) -> Interaction {
     ui.horizontal(|ui| {
         for option in ColorMode::ALL {
             ui.selectable_value(mode, option, option.label());
@@ -58,7 +66,7 @@ pub fn show(
                 active,
             ),
             ColorMode::Versions => {
-                let clicked = table(ui, "Object state", &version_state_rows(tree), total, active);
+                let states = table(ui, "Object state", &version_state_rows(tree), total, active);
                 ui.add_space(12.0);
                 let provider = scan.location.provider();
                 let rows = entry_kind_rows(tree, provider.entry_kinds());
@@ -70,7 +78,7 @@ pub fn show(
                         provider.versions_help().to_lowercase()
                     ));
                 }
-                clicked
+                states
             }
         })
         .inner
@@ -183,8 +191,8 @@ fn table(
     rows: &[LegendRow],
     total: Usage,
     active: Option<&Filter>,
-) -> Option<Filter> {
-    let mut clicked = None;
+) -> Interaction {
+    let mut interaction = Interaction::default();
     ui.push_id(title, |ui| {
         TableBuilder::new(ui)
             .striped(true)
@@ -220,14 +228,18 @@ fn table(
                         });
                         table_row.col(|ui| right_aligned(ui, format_usd(row.usage.monthly_cost)));
                         table_row.col(|ui| right_aligned(ui, format_count(row.usage.objects)));
-                        if table_row.response().clicked() && row.filter.is_some() {
-                            clicked = row.filter.clone();
+                        let response = table_row.response();
+                        if response.clicked() {
+                            interaction.clicked = row.filter.clone();
+                        }
+                        if response.hovered() {
+                            interaction.hovered = row.filter.clone();
                         }
                     });
                 }
             });
     });
-    clicked
+    interaction
 }
 
 fn swatch(ui: &mut egui::Ui, color: Option<Color32>) {

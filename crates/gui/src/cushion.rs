@@ -19,6 +19,8 @@ const LIGHT: [f32; 3] = [
 ];
 const LIGHT_LENGTH: f32 = 10.099_505; // sqrt(1² + 1² + 10²)
 pub const BACKGROUND: Color32 = Color32::from_rgb(0x20, 0x20, 0x20);
+/// Laid over what a hovered legend row doesn't match.
+const DIMMED: Color32 = Color32::from_black_alpha(180);
 
 /// Renders a layout (in pixel coordinates) into an image of `size` pixels.
 /// Only nodes without laid-out children are painted; folders shape the surface.
@@ -29,11 +31,7 @@ pub fn render(
     color: impl Fn(NodeId) -> Color32,
 ) -> ColorImage {
     let mut image = ColorImage::filled(size, BACKGROUND);
-    let parents: HashSet<NodeId> = layout
-        .iter()
-        .skip(1)
-        .filter_map(|&(id, _)| tree.node(id).parent())
-        .collect();
+    let parents = parents(tree, layout);
     let mut surfaces: HashMap<NodeId, (Surface, f32)> = HashMap::new();
 
     for &(id, rect) in layout {
@@ -81,6 +79,43 @@ impl Surface {
         let cosine = (nx * LIGHT[0] + ny * LIGHT[1] + LIGHT[2]) / (nx * nx + ny * ny + 1.0).sqrt();
         (AMBIENT + (1.0 - AMBIENT) * cosine.max(0.0)) * BRIGHTNESS
     }
+}
+
+/// An overlay for a rendered layout that darkens every painted node `keep` rejects,
+/// so the ones it accepts stand out.
+pub fn highlight_mask(
+    tree: &Tree,
+    layout: &[(NodeId, Rect)],
+    size: [usize; 2],
+    keep: impl Fn(NodeId) -> bool,
+) -> ColorImage {
+    let mut image = ColorImage::filled(size, DIMMED);
+    let [width, height] = size;
+    for &(_, rect) in painted(tree, layout).filter(|&&(id, _)| keep(id)) {
+        let columns = pixel_range(rect.x, rect.w, width);
+        for y in pixel_range(rect.y, rect.h, height) {
+            image.pixels[y * width + columns.start..y * width + columns.end]
+                .fill(Color32::TRANSPARENT);
+        }
+    }
+    image
+}
+
+/// The nodes `render` paints: those without laid-out children.
+fn painted<'a>(
+    tree: &Tree,
+    layout: &'a [(NodeId, Rect)],
+) -> impl Iterator<Item = &'a (NodeId, Rect)> {
+    let parents = parents(tree, layout);
+    layout.iter().filter(move |(id, _)| !parents.contains(id))
+}
+
+fn parents(tree: &Tree, layout: &[(NodeId, Rect)]) -> HashSet<NodeId> {
+    layout
+        .iter()
+        .skip(1)
+        .filter_map(|&(id, _)| tree.node(id).parent())
+        .collect()
 }
 
 fn paint(image: &mut ColorImage, rect: Rect, surface: Surface, color: Color32) {
@@ -144,6 +179,25 @@ mod tests {
             center > corner,
             "center {center} should be brighter than corner {corner}"
         );
+    }
+
+    #[test]
+    fn highlight_mask_dims_only_what_is_not_kept() {
+        let tree = tree_of(&[("keep", 1), ("dim", 1)]);
+        let layout = squarify(&tree, Tree::ROOT, Rect::new(0.0, 0.0, 40.0, 20.0), 0.0);
+        let kept = |id| tree.name(id) == "keep";
+
+        let mask = highlight_mask(&tree, &layout, [40, 20], kept);
+
+        for &(id, rect) in &layout[1..] {
+            let center = (rect.y + rect.h / 2.0) as usize * 40 + (rect.x + rect.w / 2.0) as usize;
+            let expected = if kept(id) {
+                Color32::TRANSPARENT
+            } else {
+                DIMMED
+            };
+            assert_eq!(mask.pixels[center], expected, "{}", tree.name(id));
+        }
     }
 
     #[test]

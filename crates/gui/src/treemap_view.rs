@@ -1,13 +1,15 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    Filtered, NodeId, NodeKind, VersionState, format_bytes, format_counted, format_usd, squarify,
+    Filtered, NodeId, NodeKind, Tree, VersionState, format_bytes, format_counted, format_usd,
+    squarify,
 };
 use eframe::egui::{
     self, Color32, PointerButton, Pos2, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
 };
 
 use crate::cushion;
+use crate::filter::Filter;
 use crate::palette::{self, Colors};
 
 /// Smallest rectangle worth laying out, in square pixels.
@@ -32,7 +34,11 @@ pub enum Action {
 pub struct TreemapView {
     /// Node rectangles in screen points, parents before children.
     layout: Vec<(NodeId, egui::Rect)>,
+    /// The same rectangles in texture pixels.
+    pixel_layout: Vec<(NodeId, clouddirstat_core::Rect)>,
     texture: Option<TextureHandle>,
+    /// The overlay for a hovered legend row, until the treemap is redrawn.
+    highlight: Option<(Filter, TextureHandle)>,
     drawn_for: Option<(egui::Rect, NodeId)>,
     drawn_at: Option<Instant>,
     /// How long the last redraw took.
@@ -48,6 +54,9 @@ impl TreemapView {
 
     /// Draws the treemap with `root` filling it, and returns what the user did.
     /// While `scanning`, a tree that keeps changing is redrawn only now and then.
+    /// `highlight` dims everything outside a legend row (for a scan rooted at
+    /// `scan_root`).
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -56,6 +65,8 @@ impl TreemapView {
         colors: &Colors,
         selected: Option<NodeId>,
         scanning: bool,
+        highlight: Option<&Filter>,
+        scan_root: NodeId,
     ) -> Option<Action> {
         let tree = view.tree;
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
@@ -75,9 +86,13 @@ impl TreemapView {
             }
         }
 
-        if let Some(texture) = &self.texture {
-            let uv = egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-            painter.image(texture.id(), bounds, uv, Color32::WHITE);
+        let uv = egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+        if let Some(texture) = self.texture.as_ref().map(TextureHandle::id) {
+            painter.image(texture, bounds, uv, Color32::WHITE);
+            if let Some(filter) = highlight {
+                let mask = self.highlight_mask(ui.ctx(), tree, filter, scan_root);
+                painter.image(mask, bounds, uv, Color32::WHITE);
+            }
         }
 
         if let Some(rect) = selected.and_then(|id| self.rect_of(id)) {
@@ -149,17 +164,48 @@ impl TreemapView {
         }
 
         self.layout = layout
-            .into_iter()
-            .map(|(id, rect)| {
+            .iter()
+            .map(|&(id, rect)| {
                 let min = bounds.min + egui::vec2(rect.x, rect.y) / pixels_per_point;
                 let size = egui::vec2(rect.w, rect.h) / pixels_per_point;
                 (id, egui::Rect::from_min_size(min, size))
             })
             .collect();
+        self.pixel_layout = layout;
+        self.highlight = None;
         self.drawn_for = Some((bounds, root));
         self.drawn_at = Some(Instant::now());
         self.redraw_time = started.elapsed();
         self.stale = false;
+    }
+
+    /// The overlay for `filter`, made once per hovered row and redraw.
+    fn highlight_mask(
+        &mut self,
+        ctx: &egui::Context,
+        tree: &Tree,
+        filter: &Filter,
+        scan_root: NodeId,
+    ) -> egui::TextureId {
+        if let Some((drawn, mask)) = &self.highlight
+            && drawn == filter
+        {
+            return mask.id();
+        }
+        let size = self
+            .texture
+            .as_ref()
+            .map_or([1, 1], |texture| texture.size());
+        let image = cushion::highlight_mask(
+            tree,
+            &self.pixel_layout,
+            size,
+            filter.matcher(tree, scan_root),
+        );
+        let mask = ctx.load_texture("treemap highlight", image, TextureOptions::NEAREST);
+        let id = mask.id();
+        self.highlight = Some((filter.clone(), mask));
+        id
     }
 
     /// The deepest node under `pointer`. Children come after their parents in the

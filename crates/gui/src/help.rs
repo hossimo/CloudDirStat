@@ -7,6 +7,7 @@ const README_URL: &str = "https://github.com/hossimo/CloudDirStat#readme";
 /// Drawn at half size so it stays sharp on high-DPI screens.
 const LOGO_PNG: &[u8] = include_bytes!("../../../icons/png/icon-128.png");
 const LOGO_SIZE: f32 = 64.0;
+const SIZE: egui::Vec2 = egui::vec2(360.0, 160.0);
 
 /// The Help window: the app's name, version, and links to the project. Permissions and
 /// sign-in are documented in the README. Opens as its own OS window.
@@ -14,6 +15,8 @@ const LOGO_SIZE: f32 = 64.0;
 pub struct HelpWindow {
     open: bool,
     logo: Option<egui::TextureHandle>,
+    /// Where the window opened, kept while it is open so it doesn't follow the main window.
+    position: Option<egui::Pos2>,
 }
 
 impl HelpWindow {
@@ -27,15 +30,24 @@ impl HelpWindow {
 
     pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
+            self.position = None;
             return;
         }
         if self.logo.is_none() {
             self.logo = load_logo(ctx);
         }
         let logo = self.logo.as_ref();
-        let builder = crate::with_app_icon(egui::ViewportBuilder::default())
+        if self.position.is_none() {
+            self.position = centered_on_main_window(ctx);
+        }
+        let mut builder = crate::with_app_icon(egui::ViewportBuilder::default())
             .with_title(TITLE)
-            .with_inner_size([360.0, 160.0]);
+            .with_inner_size(SIZE)
+            .with_resizable(false)
+            .with_maximize_button(false);
+        if let Some(position) = self.position {
+            builder = builder.with_position(position);
+        }
 
         let closed = ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("help"),
@@ -74,6 +86,12 @@ fn contents(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
             ui.hyperlink_to("Source code on GitHub", REPOSITORY_URL);
         });
     });
+}
+
+/// `None` when the platform doesn't report where the main window is.
+fn centered_on_main_window(ctx: &egui::Context) -> Option<egui::Pos2> {
+    let main = ctx.input(|input| input.viewport().outer_rect)?;
+    Some(main.center() - SIZE / 2.0)
 }
 
 /// A broken logo file only costs the logo.

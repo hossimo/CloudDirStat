@@ -334,10 +334,19 @@ impl App {
             self.error_open = false;
             return;
         };
-        if let Some(error_view::Action::Help) =
-            error_view::window(ctx, &problem, &mut self.error_open)
-        {
-            self.help.open();
+        match error_view::window(ctx, &problem, &mut self.error_open) {
+            Some(error_view::Action::Help) => self.help.open(),
+            Some(error_view::Action::Clear) => {
+                self.input_error = None;
+                if let Some(Scan {
+                    state: ScanState::Failed(_),
+                    ..
+                }) = &self.scan
+                {
+                    self.scan = None;
+                }
+            }
+            None => {}
         }
     }
 

@@ -129,6 +129,8 @@ fn is_denied(message: &str) -> bool {
 /// What the user did in the error window.
 pub enum Action {
     Help,
+    /// Forget the failed scan (or the bad input) and the error with it.
+    Clear,
 }
 
 /// Background and text colors for errors, for the current light or dark theme.
@@ -186,48 +188,80 @@ pub fn block(ui: &mut egui::Ui, problem: &Problem) {
 /// the full details. `open` turns false when it is closed.
 pub fn window(ctx: &egui::Context, problem: &Problem, open: &mut bool) -> Option<Action> {
     let mut action = None;
-    let modal = egui::Modal::new(egui::Id::new("error window")).show(ctx, |ui| {
-        ui.set_width(WINDOW_WIDTH.min(ctx.content_rect().width() - 64.0));
-        let (_, text) = colors(ui.visuals());
-        ui.label(
-            RichText::new(&problem.title)
-                .color(text)
-                .strong()
-                .size(18.0),
-        );
-        ui.add_space(6.0);
-        if let Some(hint) = &problem.hint {
-            ui.add(Label::new(hint).wrap());
-            ui.add_space(6.0);
-        }
-        details(ui, problem);
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button("Copy")
-                .on_hover_text("Copy the error, e.g. for a bug report")
-                .clicked()
-            {
-                ui.ctx().copy_text(problem.text());
-            }
-            if ui
-                .button("Help")
-                .on_hover_text("Permissions and how to sign in")
-                .clicked()
-            {
-                action = Some(Action::Help);
-            }
-            ui.hyperlink_to("Troubleshooting", TROUBLESHOOTING_URL);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Close").clicked() {
-                    *open = false;
+    // No margin of its own, so the header's color reaches the window's edges.
+    let window_frame = egui::Frame::popup(&ctx.global_style()).inner_margin(0);
+    let modal = egui::Modal::new(egui::Id::new("error window"))
+        .frame(window_frame)
+        .show(ctx, |ui| {
+            let width = WINDOW_WIDTH.min(ctx.content_rect().width() - 64.0);
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            header(ui, &problem.title, width);
+            egui::Frame::new().inner_margin(16).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                if let Some(hint) = &problem.hint {
+                    ui.add(Label::new(hint).wrap());
+                    ui.add_space(6.0);
                 }
+                details(ui, problem);
+                ui.add_space(10.0);
+                action = buttons(ui, problem, open);
             });
         });
-    });
     if modal.should_close() || action.is_some() {
         *open = false;
     }
+    action
+}
+
+/// The title on the same colors as the status bar's error.
+fn header(ui: &mut egui::Ui, title: &str, width: f32) {
+    let (_, text) = colors(ui.visuals());
+    // Rounded like the window's top corners, square where it meets the body.
+    let window = ui.visuals().menu_corner_radius;
+    frame(ui.visuals(), Margin::symmetric(16, 10))
+        .corner_radius(egui::CornerRadius {
+            sw: 0,
+            se: 0,
+            ..window
+        })
+        .show(ui, |ui| {
+            ui.set_width(width - 32.0);
+            ui.label(RichText::new(title).color(text).strong().size(18.0));
+        });
+}
+
+fn buttons(ui: &mut egui::Ui, problem: &Problem, open: &mut bool) -> Option<Action> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if ui
+            .button("Copy")
+            .on_hover_text("Copy the error, e.g. for a bug report")
+            .clicked()
+        {
+            ui.ctx().copy_text(problem.text());
+        }
+        if ui
+            .button("Help")
+            .on_hover_text("Permissions and how to sign in")
+            .clicked()
+        {
+            action = Some(Action::Help);
+        }
+        ui.hyperlink_to("Troubleshooting", TROUBLESHOOTING_URL);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                *open = false;
+            }
+            if ui
+                .button("Clear")
+                .on_hover_text("Clear this error and start over")
+                .clicked()
+            {
+                action = Some(Action::Clear);
+            }
+        });
+    });
     action
 }
 

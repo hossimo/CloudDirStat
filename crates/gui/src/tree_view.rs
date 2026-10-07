@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use clouddirstat_core::{
     Date, Filtered, NodeId, NodeKind, Tree, Usage, format_bytes, format_count, format_usd,
 };
-use eframe::egui::{self, Align, Color32, Label, Sense};
+use eframe::egui::{self, Align, Color32, Key, Label, Sense};
 use egui_extras::{Column, TableBuilder};
 
 use crate::palette::{self, Colors};
@@ -36,7 +36,8 @@ pub struct TreeView {
     shown: HashMap<NodeId, usize>,
     rows: Vec<Row>,
     stale: bool,
-    scroll_to: Option<NodeId>,
+    /// A row to bring into view, and where: centered, or just enough to be visible.
+    scroll_to: Option<(NodeId, Option<Align>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -61,7 +62,7 @@ impl TreeView {
             self.expanded.insert(parent);
             current = tree.node(parent).parent();
         }
-        self.scroll_to = Some(id);
+        self.scroll_to = Some((id, Some(Align::Center)));
         self.stale = true;
     }
 
@@ -83,12 +84,15 @@ impl TreeView {
         if self.stale {
             self.rebuild_rows(view, root);
         }
+        self.arrow_keys(ui, tree, root, selected);
+        if self.stale {
+            self.rebuild_rows(view, root);
+        }
 
-        let scroll_row = self.scroll_to.take().and_then(|target| {
-            self.rows
-                .iter()
-                .position(|row| row.id == target && row.more.is_none())
-        });
+        let scroll_to = self
+            .scroll_to
+            .take()
+            .and_then(|(target, align)| Some((self.row_of(target)?, align)));
 
         // Name starts with whatever the number columns leave over; after that every
         // column keeps the width the user gives it, and the last column absorbs the
@@ -111,8 +115,8 @@ impl TreeView {
             table = table.column(Column::initial(width).at_least(40.0).clip(true));
         }
         table = table.column(Column::remainder().at_least(60.0).clip(true));
-        if let Some(row) = scroll_row {
-            table = table.scroll_to_row(row, Some(Align::Center));
+        if let Some((row, align)) = scroll_to {
+            table = table.scroll_to_row(row, align);
         }
 
         let mut toggled = None;
@@ -209,6 +213,78 @@ impl TreeView {
             self.stale = true;
         }
         action
+    }
+
+    /// With an item selected and no text field taking the keyboard, Up and Down select the
+    /// previous and next item, Right opens a folder (or goes to its first item when
+    /// open), and Left closes it (or goes to the folder above).
+    fn arrow_keys(
+        &mut self,
+        ui: &egui::Ui,
+        tree: &Tree,
+        root: NodeId,
+        selected: &mut Option<NodeId>,
+    ) {
+        let Some(current) = *selected else {
+            return;
+        };
+        if ui.ctx().egui_wants_keyboard_input() {
+            return;
+        }
+        let Some(index) = self.row_of(current) else {
+            return;
+        };
+        let key = ui.input_mut(|input| {
+            [
+                Key::ArrowUp,
+                Key::ArrowDown,
+                Key::ArrowLeft,
+                Key::ArrowRight,
+            ]
+            .into_iter()
+            .find(|key| input.consume_key(egui::Modifiers::NONE, *key))
+        });
+        let is_folder = tree.node(current).has_children();
+        let is_open = self.expanded.contains(&current);
+        let target = match key {
+            Some(Key::ArrowUp) => self.rows[..index]
+                .iter()
+                .rev()
+                .find(|row| row.more.is_none())
+                .map(|row| row.id),
+            Some(Key::ArrowDown) => self.rows[index + 1..]
+                .iter()
+                .find(|row| row.more.is_none())
+                .map(|row| row.id),
+            Some(Key::ArrowRight) if is_folder && !is_open => {
+                self.expanded.insert(current);
+                self.stale = true;
+                None
+            }
+            Some(Key::ArrowRight) if is_folder => self
+                .rows
+                .get(index + 1)
+                .filter(|row| row.depth > self.rows[index].depth && row.more.is_none())
+                .map(|row| row.id),
+            Some(Key::ArrowLeft) if is_folder && is_open => {
+                self.expanded.remove(&current);
+                self.stale = true;
+                None
+            }
+            Some(Key::ArrowLeft) if current != root => tree.node(current).parent(),
+            _ => None,
+        };
+        if let Some(target) = target {
+            *selected = Some(target);
+            self.scroll_to = Some((target, None));
+        }
+    }
+
+    /// The row showing `id`, unless it is hidden in a closed folder or past a "more" row.
+    fn row_of(&self, id: NodeId) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|row| row.id == id && row.more.is_none())
     }
 
     /// Draws the expand/collapse arrow; returns whether it was clicked.
@@ -344,5 +420,89 @@ fn fraction(part: u64, whole: u64) -> f32 {
         0.0
     } else {
         (part as f64 / whole as f64) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palette::ColorMode;
+    use clouddirstat_core::{Entry, EntryKind};
+
+    fn tree_of(files: &[(&str, u64)]) -> Tree {
+        let mut tree = Tree::new();
+        for &(key, size) in files {
+            tree.insert(&Entry {
+                key: key.to_owned(),
+                size,
+                storage_class: "STANDARD".into(),
+                kind: EntryKind::Current,
+                last_modified: None,
+            });
+        }
+        tree
+    }
+
+    /// Shows the folder list for one frame, with `key` pressed if given.
+    fn frame(
+        ctx: &egui::Context,
+        list: &mut TreeView,
+        tree: &Tree,
+        selected: &mut Option<NodeId>,
+        key: Option<Key>,
+    ) {
+        let colors = Colors::new(ColorMode::StorageClass, tree, Tree::ROOT);
+        let mut input = egui::RawInput::default();
+        if let Some(key) = key {
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        let output = ctx.run_ui(input, |ui| {
+            list.show(ui, tree.into(), Tree::ROOT, "root", &colors, selected);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn arrow_keys_move_the_selection_and_open_and_close_folders() {
+        let tree = tree_of(&[("a/x.bin", 10), ("a/y.bin", 5), ("b.bin", 3)]);
+        let find = |parent, name, kind| tree.find_child(parent, name, kind).unwrap();
+        let a = find(Tree::ROOT, "a", NodeKind::Directory);
+        let x = find(a, "x.bin", NodeKind::Object);
+        let y = find(a, "y.bin", NodeKind::Object);
+        let b = find(Tree::ROOT, "b.bin", NodeKind::Object);
+
+        let ctx = egui::Context::default();
+        let mut list = TreeView::default();
+        let mut selected = Some(a);
+        frame(&ctx, &mut list, &tree, &mut selected, None);
+
+        let mut press = |key| {
+            frame(&ctx, &mut list, &tree, &mut selected, Some(key));
+            selected
+        };
+        assert_eq!(press(Key::ArrowRight), Some(a), "opens the folder");
+        assert_eq!(press(Key::ArrowRight), Some(x), "goes to its first item");
+        assert_eq!(press(Key::ArrowDown), Some(y));
+        assert_eq!(press(Key::ArrowDown), Some(b), "leaves the folder");
+        assert_eq!(press(Key::ArrowUp), Some(y));
+        assert_eq!(press(Key::ArrowLeft), Some(a), "goes to the folder above");
+        assert_eq!(press(Key::ArrowLeft), Some(a), "closes the folder");
+        assert_eq!(
+            press(Key::ArrowDown),
+            Some(b),
+            "skips the closed folder's items"
+        );
+        assert_eq!(press(Key::ArrowLeft), Some(Tree::ROOT));
+        assert_eq!(
+            press(Key::ArrowUp),
+            Some(Tree::ROOT),
+            "stays on the first row"
+        );
     }
 }

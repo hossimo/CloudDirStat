@@ -129,8 +129,8 @@ fn is_denied(message: &str) -> bool {
 /// What the user did in the error window.
 pub enum Action {
     Help,
-    /// Forget the failed scan (or the bad input) and the error with it.
-    Clear,
+    /// Empty the Location field down to its scheme (e.g. `s3://`).
+    ClearLocation,
 }
 
 /// Background and text colors for errors, for the current light or dark theme.
@@ -254,11 +254,11 @@ fn buttons(ui: &mut egui::Ui, problem: &Problem, open: &mut bool) -> Option<Acti
                 *open = false;
             }
             if ui
-                .button("Clear")
-                .on_hover_text("Clear this error and start over")
+                .button("Clear location")
+                .on_hover_text("Empty the Location field, keeping s3://, gs://, or az://")
                 .clicked()
             {
-                action = Some(Action::Clear);
+                action = Some(Action::ClearLocation);
             }
         });
     });

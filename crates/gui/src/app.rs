@@ -336,15 +336,9 @@ impl App {
         };
         match error_view::window(ctx, &problem, &mut self.error_open) {
             Some(error_view::Action::Help) => self.help.open(),
-            Some(error_view::Action::Clear) => {
-                self.input_error = None;
-                if let Some(Scan {
-                    state: ScanState::Failed(_),
-                    ..
-                }) = &self.scan
-                {
-                    self.scan = None;
-                }
+            Some(error_view::Action::ClearLocation) => {
+                self.location_input = self.provider().scheme().to_owned();
+                focus_at_end(ctx, &self.location_input);
             }
             None => {}
         }

@@ -72,7 +72,7 @@ fn main() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: with_app_icon(
             egui::ViewportBuilder::default()
-                .with_title(app::window_title(false))
+                .with_title("CloudDirStat")
                 .with_inner_size([1280.0, 800.0]),
         ),
         ..Default::default()

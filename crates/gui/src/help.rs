@@ -25,7 +25,7 @@ impl HelpWindow {
         self.open = true;
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, version_in_title: &mut bool) {
+    pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
             return;
         }
@@ -35,7 +35,7 @@ impl HelpWindow {
         let logo = self.logo.as_ref();
         let builder = crate::with_app_icon(egui::ViewportBuilder::default())
             .with_title(TITLE)
-            .with_inner_size([360.0, 200.0]);
+            .with_inner_size([360.0, 160.0]);
 
         let closed = ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("help"),
@@ -43,10 +43,10 @@ impl HelpWindow {
             |ui, class| {
                 if class == egui::ViewportClass::EmbeddedWindow {
                     // No OS windows on this platform: egui shows it inside the main window.
-                    contents(ui, logo, version_in_title);
+                    contents(ui, logo);
                     return false;
                 }
-                egui::CentralPanel::default().show(ui, |ui| contents(ui, logo, version_in_title));
+                egui::CentralPanel::default().show(ui, |ui| contents(ui, logo));
                 ui.input(|input| input.viewport().close_requested())
             },
         );
@@ -56,7 +56,7 @@ impl HelpWindow {
     }
 }
 
-fn contents(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>, version_in_title: &mut bool) {
+fn contents(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
     ui.horizontal(|ui| {
         if let Some(logo) = logo {
             let size = egui::vec2(LOGO_SIZE, LOGO_SIZE);
@@ -74,8 +74,6 @@ fn contents(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>, version_in_ti
             ui.hyperlink_to("Source code on GitHub", REPOSITORY_URL);
         });
     });
-    ui.add_space(8.0);
-    ui.checkbox(version_in_title, "Show the version in the title bar");
 }
 
 /// A broken logo file only costs the logo.

@@ -309,7 +309,7 @@ clouddirstat-gui s3://my-bucket --versions         # include old versions
 - **Filters:** click a legend row to show only those files everywhere, with sizes and costs recalculated. Click it again, press **Clear filter**, or press Esc to show everything.
 - **Versions** (checkbox): also lists old versions. In S3 these are noncurrent versions and delete markers; in Google Cloud, noncurrent and soft-deleted objects; in Azure, previous versions, snapshots, and soft-deleted blobs. Incomplete S3 uploads are always found.
 - **Estimate** (S3 only): bucket sizes, costs, and what a full scan would cost, from CloudWatch, without listing anything. See [S3 estimates without scanning](#s3-estimates-without-scanning).
-- **Help:** the app version and commit, with links to this README, the issue tracker, and the source code. Tick **Show the version in the title bar** to add it to the window title (off by default; not remembered between runs).
+- **Help:** the app version and commit, with links to this README, the issue tracker, and the source code.
 - **Stop** ends a scan and keeps what was found so far.
 - **Status bar:** the total cost per month, what the scan cost, and warnings (hover for details). While a whole S3 bucket is scanned, a progress bar compares the objects listed so far with CloudWatch's count.
 

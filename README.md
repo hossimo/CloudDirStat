@@ -123,7 +123,7 @@ In the app you don't need to type the `s3://`, `gs://`, or `az://` part: the **S
 
 ## Sign in and permissions
 
-In the app, the sign-in choices to the right of **Location** change with the cloud you choose: **Profile / Access key** for `s3://`, **Google login / Access token** for `gs://`, and **Azure CLI / SAS token / Account key** for `az://`. The **Help** button repeats the essentials.
+In the app, the sign-in choices to the right of **Location** change with the cloud you choose: **Profile / Access key** for `s3://`, **Google login / Access token** for `gs://`, and **Azure CLI / SAS token / Account key** for `az://`.
 
 Signing in with your cloud's own login is recommended: nothing secret is typed into CloudDirStat, and sessions expire on their own. Keys and tokens work too, for when you can't use a login.
 
@@ -164,7 +164,7 @@ Create keys for an IAM user or role that has only the permissions below.
 
 **AWS permissions**
 
-A ready-to-use minimal IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json); the app's **Help** window fills in the bucket name for you.
+A ready-to-use minimal IAM policy is in [`docs/iam-policy.json`](docs/iam-policy.json); replace `YOUR-BUCKET` with your bucket name.
 
 | Permission | Needed | For |
 |---|---|---|
@@ -309,7 +309,7 @@ clouddirstat-gui s3://my-bucket --versions         # include old versions
 - **Filters:** click a legend row to show only those files everywhere, with sizes and costs recalculated. Click it again, press **Clear filter**, or press Esc to show everything.
 - **Versions** (checkbox): also lists old versions. In S3 these are noncurrent versions and delete markers; in Google Cloud, noncurrent and soft-deleted objects; in Azure, previous versions, snapshots, and soft-deleted blobs. Incomplete S3 uploads are always found.
 - **Estimate** (S3 only): bucket sizes, costs, and what a full scan would cost, from CloudWatch, without listing anything. See [S3 estimates without scanning](#s3-estimates-without-scanning).
-- **Help:** permissions and sign-in for each cloud, and the app version. Tick **Show the version in the title bar** to add it to the window title (off by default; not remembered between runs).
+- **Help:** the app version and commit, with links to this README, the issue tracker, and the source code. Tick **Show the version in the title bar** to add it to the window title (off by default; not remembered between runs).
 - **Stop** ends a scan and keeps what was found so far.
 - **Status bar:** the total cost per month, what the scan cost, and warnings (hover for details). While a whole S3 bucket is scanned, a progress bar compares the objects listed so far with CloudWatch's count.
 

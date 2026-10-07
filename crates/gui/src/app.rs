@@ -285,7 +285,7 @@ impl App {
             ui.separator();
             if ui
                 .button("Help")
-                .on_hover_text("Required permissions and how to sign in")
+                .on_hover_text("Version, and links to the README and issues")
                 .clicked()
             {
                 self.help.toggle();
@@ -470,14 +470,8 @@ impl eframe::App for App {
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        // The policy in Help is for S3, filled in with the bucket being typed.
-        let location = self.location_input.trim().parse::<Location>().ok();
-        let bucket = location
-            .as_ref()
-            .filter(|location| location.provider() == Provider::S3)
-            .map(|location| location.bucket().unwrap_or("*"));
         let version_in_title = self.version_in_title;
-        self.help.show(ui.ctx(), bucket, &mut self.version_in_title);
+        self.help.show(ui.ctx(), &mut self.version_in_title);
         if self.version_in_title != version_in_title {
             let title = window_title(self.version_in_title);
             ui.ctx()

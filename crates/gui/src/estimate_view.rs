@@ -22,14 +22,9 @@ const NUMBER_COLUMNS: [f32; 5] = [80.0, 90.0, 80.0, 80.0, 90.0];
 /// Window margins, the gaps between table columns, and the scroll bar.
 const WINDOW_PADDING: f32 = 40.0;
 const MAX_FITTED_HEIGHT: f32 = 760.0;
-
-/// What the user did in the window.
-pub enum Action {
-    /// Scan the estimated location.
-    Scan(Box<ScanRequest>),
-    /// Put this bucket in the Location field.
-    Choose(String),
-}
+const MIN_HEIGHT: f32 = 200.0;
+/// Only the height can be changed; the width is fitted to the estimate.
+const MAX_HEIGHT: f32 = 10_000.0;
 
 enum State {
     Running,
@@ -43,6 +38,7 @@ pub struct EstimateTask {
     state: State,
     /// Whether the window has been sized to the finished estimate.
     fitted: bool,
+    width: f32,
     receiver: oneshot::Receiver<clouddirstat_providers::Result<Estimate>>,
 }
 
@@ -59,6 +55,7 @@ impl EstimateTask {
             request,
             state: State::Running,
             fitted: false,
+            width: INITIAL_WIDTH,
             receiver,
         }
     }
@@ -77,47 +74,48 @@ impl EstimateTask {
         }
     }
 
-    /// Shows the window. Returns what the user did; `open` turns false when closed.
-    /// `scanning` disables the Scan button while another scan runs. Opens as its own OS
-    /// window, like Help, so it can sit beside the main window.
-    pub fn show(&mut self, ctx: &egui::Context, open: &mut bool, scanning: bool) -> Option<Action> {
+    /// Shows the window. Returns the bucket clicked, to put in the Location field; `open`
+    /// turns false when closed. Opens as its own OS window, like Help, so it can sit
+    /// beside the main window.
+    pub fn show(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<String> {
         self.poll();
         let builder = crate::with_app_icon(egui::ViewportBuilder::default())
             .with_title(format!("Estimate: {}", self.request.location))
             .with_inner_size([INITIAL_WIDTH, 240.0])
-            .with_min_inner_size([360.0, 200.0]);
-        let (action, closed) = ctx.show_viewport_immediate(
+            .with_min_inner_size([self.width, MIN_HEIGHT])
+            .with_max_inner_size([self.width, MAX_HEIGHT])
+            .with_maximize_button(false);
+        let (chosen, closed) = ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("estimate"),
             builder,
             |ui, class| {
                 if class == egui::ViewportClass::EmbeddedWindow {
                     // No OS windows on this platform: egui shows it inside the main window.
-                    let action = egui::ScrollArea::vertical()
+                    let chosen = egui::ScrollArea::vertical()
                         .show(ui, |ui| {
-                            let action = self.top(ui, EMBEDDED_TABLE_HEIGHT);
-                            self.bottom(ui, scanning).or(action)
+                            let chosen = self.top(ui, EMBEDDED_TABLE_HEIGHT);
+                            self.bottom(ui);
+                            chosen
                         })
                         .inner;
-                    return (action, false);
+                    return (chosen, false);
                 }
                 self.fit_window(ui);
-                let bottom = egui::Panel::bottom("estimate_footer")
-                    .show(ui, |ui| self.bottom(ui, scanning))
-                    .inner;
-                let top = egui::CentralPanel::default()
+                egui::Panel::bottom("estimate_footer").show(ui, |ui| self.bottom(ui));
+                let chosen = egui::CentralPanel::default()
                     .show(ui, |ui| self.top(ui, f32::INFINITY))
                     .inner;
                 let closed = ui.input(|input| input.viewport().close_requested());
-                (bottom.or(top), closed)
+                (chosen, closed)
             },
         );
         if closed {
             *open = false;
         }
-        action
+        chosen
     }
 
-    /// Sizes the window to the estimate once it arrives; after that the user's size stays.
+    /// Sizes the window to the estimate once it arrives; after that the user's height stays.
     fn fit_window(&mut self, ui: &egui::Ui) {
         let State::Done(estimate) = &self.state else {
             return;
@@ -127,12 +125,21 @@ impl EstimateTask {
         }
         self.fitted = true;
         let size = fitting_size(ui, &self.request, estimate);
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        self.width = size.x;
+        // The width limits first, so the old ones don't clamp the new size.
+        let ctx = ui.ctx();
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+            size.x, MIN_HEIGHT,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(egui::vec2(
+            size.x, MAX_HEIGHT,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
     }
 
     /// Everything above the footer; the bucket table gets at most `table_height`.
-    fn top(&self, ui: &mut egui::Ui, table_height: f32) -> Option<Action> {
+    /// Returns the bucket clicked.
+    fn top(&self, ui: &mut egui::Ui, table_height: f32) -> Option<String> {
         match &self.state {
             State::Running => {
                 ui.horizontal(|ui| {
@@ -149,12 +156,11 @@ impl EstimateTask {
         }
     }
 
-    /// The note and Scan button, once the estimate is in.
-    fn bottom(&self, ui: &mut egui::Ui, scanning: bool) -> Option<Action> {
-        let State::Done(estimate) = &self.state else {
-            return None;
-        };
-        footer(ui, &self.request, estimate, scanning)
+    /// Skipped buckets and the note about CloudWatch, once the estimate is in.
+    fn bottom(&self, ui: &mut egui::Ui) {
+        if let State::Done(estimate) = &self.state {
+            footer(ui, estimate);
+        }
     }
 }
 
@@ -175,7 +181,7 @@ fn summary(
     request: &ScanRequest,
     estimate: &Estimate,
     table_height: f32,
-) -> Option<Action> {
+) -> Option<String> {
     let as_of = estimate
         .as_of()
         .map_or_else(|| "no data yet".to_owned(), |date| date.to_string());
@@ -213,7 +219,7 @@ fn summary(
         return None;
     }
     ui.add_space(8.0);
-    bucket_table(ui, estimate, table_height).map(Action::Choose)
+    bucket_table(ui, estimate, table_height)
 }
 
 /// One row per storage class: color, name, size, and share of the total.
@@ -237,12 +243,7 @@ fn class_table(ui: &mut egui::Ui, estimate: &Estimate) {
         });
 }
 
-fn footer(
-    ui: &mut egui::Ui,
-    request: &ScanRequest,
-    estimate: &Estimate,
-    scanning: bool,
-) -> Option<Action> {
+fn footer(ui: &mut egui::Ui, estimate: &Estimate) {
     ui.add_space(4.0);
     for skipped in &estimate.skipped {
         ui.colored_label(
@@ -255,15 +256,6 @@ fn footer(
          marker, and upload part, so a scan without Versions may list fewer.",
     );
     ui.add_space(4.0);
-    let scan = ui
-        .add_enabled(
-            !scanning,
-            egui::Button::new(format!("Scan {}", request.location)),
-        )
-        .on_disabled_hover_text("A scan is already running. Stop it first.");
-    ui.add_space(4.0);
-    scan.clicked()
-        .then(|| Action::Scan(Box::new(request.clone())))
 }
 
 /// One row per bucket. Returns the bucket that was clicked, if any.
@@ -356,8 +348,8 @@ fn widest<'a>(ui: &egui::Ui, texts: impl Iterator<Item = &'a str>) -> f32 {
 /// A window size that shows the whole estimate without scrolling, up to a limit.
 fn fitting_size(ui: &egui::Ui, request: &ScanRequest, estimate: &Estimate) -> egui::Vec2 {
     let line = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
-    // Heading, two text lines, the footer note (two lines), the Scan button, and margins.
-    let mut height = 8.0 * line + 40.0;
+    // Heading, two text lines, the footer note (two lines), and margins.
+    let mut height = 7.0 * line + 40.0;
     height += estimate.classes().len() as f32 * line;
     if !request.location.prefix().is_empty() {
         height += line;

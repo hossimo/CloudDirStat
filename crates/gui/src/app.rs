@@ -11,7 +11,7 @@ use tokio::runtime::Runtime;
 use crate::cloud_picker::{self, Scheme};
 use crate::credentials_form::CredentialsForm;
 use crate::error_view::{self, Problem};
-use crate::estimate_view::{self, EstimateTask};
+use crate::estimate_view::EstimateTask;
 use crate::filter::Filter;
 use crate::help::HelpWindow;
 use crate::largest_files::{self, LargestFiles};
@@ -194,25 +194,16 @@ impl App {
     }
 
     fn estimate_window(&mut self, ctx: &egui::Context) {
-        let scanning = self.is_scanning();
         let Some(task) = &mut self.estimate else {
             return;
         };
         let mut open = true;
-        let action = task.show(ctx, &mut open, scanning);
+        let action = task.show(ctx, &mut open);
         if !open {
             self.estimate = None;
         }
-        match action {
-            Some(estimate_view::Action::Scan(request)) => {
-                self.estimate = None;
-                self.location_input = request.location.to_string();
-                self.start_scan(*request, ctx);
-            }
-            Some(estimate_view::Action::Choose(bucket)) => {
-                self.location_input = format!("s3://{bucket}/");
-            }
-            None => {}
+        if let Some(bucket) = action {
+            self.location_input = format!("s3://{bucket}/");
         }
     }
 
@@ -231,6 +222,10 @@ impl App {
         let mut submitted = false;
         let mut scan_clicked = false;
         let mut estimate_clicked = false;
+        let has_scheme = matches!(
+            cloud_picker::scheme_of(&self.location_input),
+            Scheme::Known(_)
+        );
         // Wraps onto a second line in a narrow window instead of running off the edge.
         ui.horizontal_wrapped(|ui| {
             ui.label("Location");
@@ -269,15 +264,26 @@ impl App {
                     scan.stop();
                 }
             } else {
-                scan_clicked = ui.button("Scan").clicked();
+                scan_clicked = ui
+                    .add_enabled(has_scheme, egui::Button::new("Scan"))
+                    .on_disabled_hover_text(NO_SCHEME_HINT)
+                    .clicked();
             }
+            let estimate_hint = if has_scheme {
+                "Estimates are only available for Amazon S3 so far."
+            } else {
+                NO_SCHEME_HINT
+            };
             estimate_clicked = ui
-                .add_enabled(provider == Provider::S3, egui::Button::new("Estimate"))
+                .add_enabled(
+                    has_scheme && provider == Provider::S3,
+                    egui::Button::new("Estimate"),
+                )
                 .on_hover_text(
                     "Bucket size, object count, monthly cost, and what a full scan would \
                      cost, from CloudWatch without listing (needs cloudwatch:GetMetricData)",
                 )
-                .on_disabled_hover_text("Estimates are only available for Amazon S3 so far.")
+                .on_disabled_hover_text(estimate_hint)
                 .clicked();
             ui.separator();
             if ui
@@ -290,7 +296,7 @@ impl App {
         });
         submitted |= self.credentials.show_secret_row(ui, provider);
 
-        if (scan_clicked || submitted) && !self.is_scanning() {
+        if (scan_clicked || submitted) && has_scheme && !self.is_scanning() {
             self.start_scan_from_inputs(ui.ctx());
         }
         if estimate_clicked {
@@ -718,6 +724,8 @@ fn filter_bar(ui: &mut egui::Ui, label: &str, filtered: Filtered, root: NodeId) 
 
 /// The Location field's id, so choosing a cloud can put the cursor back in it.
 const LOCATION_FIELD: &str = "location";
+const NO_SCHEME_HINT: &str =
+    "Start the location with s3://, gs://, or az:// (or choose S3, Google, or Azure on the left).";
 
 /// What is wrong with the location being typed, for the field's error outline. An
 /// unknown scheme shows at once; other mistakes (e.g. a bucket name still being typed)

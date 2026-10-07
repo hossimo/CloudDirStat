@@ -119,7 +119,7 @@ A location says what to scan. Everything after the bucket (or container) is an o
 | `az://mystorageaccount` | Every container of a storage account |
 | `az://` | Every storage account you can see (Azure CLI sign-in only) |
 
-In the app you don't need to type the `s3://`, `gs://`, or `az://` part: the **S3**, **Google**, and **Azure** buttons next to **Location** put it in for you, and switching between them keeps the rest of the location. Typing or pasting a full location selects the matching button, and an unknown scheme outlines the field in red. A location without a scheme is taken as S3. When scanning several buckets, each one appears as a top-level folder and is priced at its own region's rates; buckets you can't list are skipped with a warning.
+In the app you don't need to type the `s3://`, `gs://`, or `az://` part: the **S3**, **Google**, and **Azure** buttons next to **Location** put it in for you, and switching between them keeps the rest of the location. Typing or pasting a full location selects the matching button, and an unknown scheme outlines the field in red. **Scan** and **Estimate** stay disabled until the location starts with `s3://`, `gs://`, or `az://`; the command line takes a location without a scheme as S3. When scanning several buckets, each one appears as a top-level folder and is priced at its own region's rates; buckets you can't list are skipped with a warning.
 
 ## Sign in and permissions
 

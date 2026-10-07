@@ -69,7 +69,7 @@ fn contents(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
             ui.heading("CloudDirStat");
             ui.label(format!("Version {}", clouddirstat_core::LONG_VERSION));
             ui.add_space(6.0);
-            ui.hyperlink_to("Help (README)", README_URL);
+            ui.hyperlink_to("Help", README_URL);
             ui.hyperlink_to("Report an issue", ISSUES_URL);
             ui.hyperlink_to("Source code on GitHub", REPOSITORY_URL);
         });

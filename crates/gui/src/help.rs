@@ -27,7 +27,7 @@ impl HelpWindow {
     }
 
     /// `bucket` fills in the policy when the location field holds one (`*` for all).
-    pub fn show(&mut self, ctx: &egui::Context, bucket: Option<&str>) {
+    pub fn show(&mut self, ctx: &egui::Context, bucket: Option<&str>, version_in_title: &mut bool) {
         if !self.open {
             return;
         }
@@ -47,11 +47,13 @@ impl HelpWindow {
             |ui, class| {
                 if class == egui::ViewportClass::EmbeddedWindow {
                     // No OS windows on this platform: egui shows it inside the main window.
-                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy, logo));
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| contents(ui, &policy, logo, version_in_title));
                     return false;
                 }
                 egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| contents(ui, &policy, logo));
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| contents(ui, &policy, logo, version_in_title));
                 });
                 ui.input(|input| input.viewport().close_requested())
             },
@@ -62,8 +64,13 @@ impl HelpWindow {
     }
 }
 
-fn contents(ui: &mut egui::Ui, policy: &str, logo: Option<&egui::TextureHandle>) {
-    about(ui, logo);
+fn contents(
+    ui: &mut egui::Ui,
+    policy: &str,
+    logo: Option<&egui::TextureHandle>,
+    version_in_title: &mut bool,
+) {
+    about(ui, logo, version_in_title);
     ui.separator();
     ui.heading("Amazon S3: permissions");
     ui.label(
@@ -229,7 +236,7 @@ fn google(ui: &mut egui::Ui) {
     );
 }
 
-fn about(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
+fn about(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>, version_in_title: &mut bool) {
     ui.horizontal(|ui| {
         if let Some(logo) = logo {
             let size = egui::vec2(LOGO_SIZE, LOGO_SIZE);
@@ -252,6 +259,7 @@ fn about(ui: &mut egui::Ui, logo: Option<&egui::TextureHandle>) {
                         .copy_text(format!("CloudDirStat {}", clouddirstat_core::LONG_VERSION));
                 }
             });
+            ui.checkbox(version_in_title, "Show the version in the title bar");
         });
     });
 }

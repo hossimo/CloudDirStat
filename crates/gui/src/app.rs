@@ -33,6 +33,8 @@ pub struct App {
     location_input: String,
     credentials: CredentialsForm,
     help: HelpWindow,
+    /// Set in Help; off by default.
+    version_in_title: bool,
     include_versions: bool,
     input_error: Option<String>,
     scan: Option<Scan>,
@@ -130,6 +132,7 @@ impl App {
             location_input: String::new(),
             credentials: CredentialsForm::new(profile),
             help: HelpWindow::default(),
+            version_in_title: false,
             include_versions,
             input_error: None,
             scan: None,
@@ -293,90 +296,123 @@ impl App {
 
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if let Some(error) = &self.input_error {
-                error_view::chip(ui, error);
-                return;
-            }
-            let Some(scan) = &self.scan else {
-                ui.label("Enter a location and press Scan.");
-                return;
-            };
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                zoom_indicator(ui);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    self.status_summary(ui);
+                });
+            });
+        });
+    }
 
-            let total = scan.tree.total();
-            let summary = format!(
-                "{}  {} in {}",
-                scan.location,
-                format_bytes(total.bytes),
-                format_counted(total.objects, "object")
-            );
-            let elapsed = scan.elapsed().as_secs_f64();
-            let uploads = scan.tree.usage_by_kind(EntryKind::IncompleteUpload);
-            if uploads.objects > 0 {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    format!(
-                        "{} in {} (~{}/mo)",
-                        format_bytes(uploads.bytes),
-                        format_counted(uploads.objects, "incomplete upload"),
-                        format_usd(uploads.monthly_cost)
-                    ),
-                )
-                .on_hover_text(
-                    "Parts of multipart uploads that were never completed or aborted. \
+    fn status_summary(&self, ui: &mut egui::Ui) {
+        if let Some(error) = &self.input_error {
+            error_view::chip(ui, error);
+            return;
+        }
+        let Some(scan) = &self.scan else {
+            ui.label("Enter a location and press Scan.");
+            return;
+        };
+
+        let total = scan.tree.total();
+        let summary = format!(
+            "{}  {} in {}",
+            scan.location,
+            format_bytes(total.bytes),
+            format_counted(total.objects, "object")
+        );
+        let elapsed = scan.elapsed().as_secs_f64();
+        let uploads = scan.tree.usage_by_kind(EntryKind::IncompleteUpload);
+        if uploads.objects > 0 {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "{} in {} (~{}/mo)",
+                    format_bytes(uploads.bytes),
+                    format_counted(uploads.objects, "incomplete upload"),
+                    format_usd(uploads.monthly_cost)
+                ),
+            )
+            .on_hover_text(
+                "Parts of multipart uploads that were never completed or aborted. \
                      They are billed but hidden from normal listings. See them in the \
                      Versions tab, and clean them up with a lifecycle rule \
                      (AbortIncompleteMultipartUpload).",
-                );
-                ui.separator();
-            }
-            if let Some(pricing) = &scan.pricing {
-                ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
-                    .on_hover_text(pricing.notes());
-                ui.separator();
-            }
-            match &scan.state {
-                // The summary comes last and is cut off to fit, so the progress bar
-                // and warnings stay visible in a narrow window.
-                ScanState::Running => {
-                    ui.spinner();
-                    if let Some(expected) = scan.expected_objects {
-                        let fraction = total.objects as f32 / expected as f32;
-                        ui.add(
-                            egui::ProgressBar::new(fraction.min(0.99))
-                                .desired_width(120.0)
-                                .show_percentage(),
-                        )
-                        .on_hover_text(format!(
-                            "About {} objects in total, from CloudWatch. Its count is a \
+            );
+            ui.separator();
+        }
+        if let Some(pricing) = &scan.pricing {
+            ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
+                .on_hover_text(pricing.notes());
+            ui.separator();
+        }
+        match &scan.state {
+            // The summary comes last and is cut off to fit, so the progress bar
+            // and warnings stay visible in a narrow window.
+            ScanState::Running => {
+                ui.spinner();
+                if let Some(expected) = scan.expected_objects {
+                    let fraction = total.objects as f32 / expected as f32;
+                    ui.add(
+                        egui::ProgressBar::new(fraction.min(0.99))
+                            .desired_width(120.0)
+                            .show_percentage(),
+                    )
+                    .on_hover_text(format!(
+                        "About {} objects in total, from CloudWatch. Its count is a \
                              day old and includes every version, so this is approximate.",
-                            format_count(expected)
-                        ));
-                    }
-                    fitted(ui, format!("Scanning {summary}  ({elapsed:.0}s)"));
+                        format_count(expected)
+                    ));
                 }
-                ScanState::Finished { stats, .. } => {
-                    warnings(ui, stats);
-                    fitted(
-                        ui,
-                        format!(
-                            "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests \
-                             (~${:.4})",
-                            format_count(stats.list_requests),
-                            stats.estimated_cost_usd()
-                        ),
-                    );
-                }
-                ScanState::Stopped { .. } => {
-                    fitted(
-                        ui,
-                        format!("{summary}  ·  stopped after {elapsed:.1}s (partial)"),
-                    );
-                }
-                ScanState::Failed(error) => {
-                    error_view::chip(ui, error);
-                }
+                fitted(ui, format!("Scanning {summary}  ({elapsed:.0}s)"));
             }
-        });
+            ScanState::Finished { stats, .. } => {
+                warnings(ui, stats);
+                fitted(
+                    ui,
+                    format!(
+                        "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests \
+                             (~${:.4})",
+                        format_count(stats.list_requests),
+                        stats.estimated_cost_usd()
+                    ),
+                );
+            }
+            ScanState::Stopped { .. } => {
+                fitted(
+                    ui,
+                    format!("{summary}  ·  stopped after {elapsed:.1}s (partial)"),
+                );
+            }
+            ScanState::Failed(error) => {
+                error_view::chip(ui, error);
+            }
+        }
+    }
+}
+
+pub fn window_title(with_version: bool) -> String {
+    if with_version {
+        format!("CloudDirStat {}", clouddirstat_core::VERSION)
+    } else {
+        "CloudDirStat".to_owned()
+    }
+}
+
+/// The UI zoom (Ctrl + / Ctrl −) when it isn't 100%; clicking it goes back to 100%.
+fn zoom_indicator(ui: &mut egui::Ui) {
+    let zoom = ui.ctx().zoom_factor();
+    if (zoom - 1.0).abs() < 0.005 {
+        return;
+    }
+    let percent = (zoom * 100.0).round();
+    if ui
+        .small_button(format!("🔍 {percent}%"))
+        .on_hover_text("Zoom: click to reset to 100% (Ctrl+0)")
+        .clicked()
+    {
+        ui.ctx().set_zoom_factor(1.0);
     }
 }
 
@@ -400,7 +436,13 @@ impl eframe::App for App {
             .as_ref()
             .filter(|location| location.provider() == Provider::S3)
             .map(|location| location.bucket().unwrap_or("*"));
-        self.help.show(ui.ctx(), bucket);
+        let version_in_title = self.version_in_title;
+        self.help.show(ui.ctx(), bucket, &mut self.version_in_title);
+        if self.version_in_title != version_in_title {
+            let title = window_title(self.version_in_title);
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         self.estimate_window(ui.ctx());
 
         let Some(scan) = &self.scan else {

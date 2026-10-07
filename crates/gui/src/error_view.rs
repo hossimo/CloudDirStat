@@ -52,7 +52,8 @@ impl Problem {
             } if is_denied(message) => Self::new("Access denied")
                 .hint(format!(
                     "You are signed in, but not allowed to do this. {operation} needs \
-                     {permission}. Help lists the permissions CloudDirStat uses."
+                     {permission}. The README (linked from Help) lists the permissions \
+                     CloudDirStat uses."
                 ))
                 .details(message.as_str()),
             Error::Request {
@@ -67,7 +68,7 @@ impl Problem {
             Error::Credentials(message) => Self::new("Could not sign in")
                 .hint(
                     "Check the sign-in choice next to Location (profile, key, or token). \
-                     Help explains each one.",
+                     The README (linked from Help) explains each one.",
                 )
                 .details(message.as_str()),
             Error::InvalidLocation(input) => Self::new("Location not recognized")
@@ -243,7 +244,7 @@ fn buttons(ui: &mut egui::Ui, problem: &Problem, open: &mut bool) -> Option<Acti
         }
         if ui
             .button("Help")
-            .on_hover_text("Permissions and how to sign in")
+            .on_hover_text("Links to the README and issues")
             .clicked()
         {
             action = Some(Action::Help);

@@ -5,7 +5,7 @@ Thanks for your interest! Bug reports, test results from real Google Cloud and A
 ## Ground rules
 
 - **Never write to a bucket.** CloudDirStat only lists. It must never add, change, or delete data in any bucket or container, or read file contents. A feature that would need a write is out of scope, even as an opt-in.
-- **Least privilege.** A scan needs only permission to list. When an optional permission is missing, the feature it enables is skipped with a warning; the scan doesn't fail. A new API call means updating the permission tables in the README, [`docs/iam-policy.json`](docs/iam-policy.json), and the app's Help window (`crates/gui/src/help.rs`).
+- **Least privilege.** A scan needs only permission to list. When an optional permission is missing, the feature it enables is skipped with a warning; the scan doesn't fail. A new API call means updating the permission tables in the README and [`docs/iam-policy.json`](docs/iam-policy.json).
 - **No secrets in logs, errors, or the repository.** Keys and tokens are never printed, logged, or saved. Error messages that mention a URL show only its host, because SAS tokens travel in the query string. There is no telemetry.
 - **Made-up data only.** The repository is public: never commit real bucket, account, or object names. Use the [demo data](#demo-data-for-screenshots) for screenshots.
 

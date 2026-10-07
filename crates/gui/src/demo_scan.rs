@@ -203,11 +203,9 @@ fn as_listed_by(provider: Provider, mut entry: Entry) -> Option<Entry> {
 
 fn find_bucket(name: &str) -> clouddirstat_providers::Result<&'static DemoBucket> {
     demo::bucket(name).ok_or_else(|| {
-        let names: Vec<_> = demo::BUCKETS.iter().map(|bucket| bucket.name).collect();
         Error::Unsupported(format!(
-            "there is no {name} in the demo build, which only has made-up data. Try s3://, \
-             gs://, az://demo/, or one of: {}",
-            names.join(", ")
+            "there is no {name} in the demo build, which only has made-up data.\n\nTry:\n\
+             - s3://\n- gs://\n- az://demo/"
         ))
     })
 }

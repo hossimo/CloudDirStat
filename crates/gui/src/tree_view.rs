@@ -19,6 +19,14 @@ const LAST_MODIFIED_WIDTH: f32 = 100.0;
 /// Keeps a folder with millions of objects from becoming millions of rows.
 const ROWS_PER_FOLDER: usize = 1000;
 
+/// What the user asked for from a folder's row.
+pub enum Action {
+    /// Zoom the treemap to this folder.
+    Zoom(NodeId),
+    /// Put this folder in the Location field.
+    SetLocation(NodeId),
+}
+
 /// The folder list: one row per visible node, children sorted largest first.
 #[derive(Default)]
 pub struct TreeView {
@@ -65,7 +73,7 @@ impl TreeView {
         root_label: &str,
         colors: &Colors,
         selected: &mut Option<NodeId>,
-    ) -> Option<NodeId> {
+    ) -> Option<Action> {
         if self.root != Some(root) {
             self.root = Some(root);
             self.expanded.insert(root);
@@ -109,7 +117,7 @@ impl TreeView {
 
         let mut toggled = None;
         let mut show_more = None;
-        let mut zoom = None;
+        let mut action = None;
         table
             .header(ROW_HEIGHT, |mut header| {
                 for title in [
@@ -174,11 +182,15 @@ impl TreeView {
                     }
                     if node.kind() == NodeKind::Directory {
                         if response.double_clicked() {
-                            zoom = Some(row.id);
+                            action = Some(Action::Zoom(row.id));
                         }
                         response.context_menu(|ui| {
                             if ui.button("Zoom treemap here (double-click)").clicked() {
-                                zoom = Some(row.id);
+                                action = Some(Action::Zoom(row.id));
+                                ui.close();
+                            }
+                            if ui.button("Set as Location").clicked() {
+                                action = Some(Action::SetLocation(row.id));
                                 ui.close();
                             }
                         });
@@ -196,7 +208,7 @@ impl TreeView {
             *self.shown.entry(folder).or_insert(ROWS_PER_FOLDER) += ROWS_PER_FOLDER;
             self.stale = true;
         }
-        zoom
+        action
     }
 
     /// Draws the expand/collapse arrow; returns whether it was clicked.

@@ -109,6 +109,15 @@ impl Location {
         };
         Some(bucket.as_str()).filter(|bucket| !bucket.is_empty())
     }
+
+    /// The location of a folder found by this scan, given its path as the scan's keys
+    /// spell it: below the bucket, or below the scheme (or account) when the scan
+    /// covered several buckets, containers, or accounts.
+    pub fn folder(&self, path: &str) -> String {
+        let location = self.to_string();
+        let base = location.strip_suffix(self.prefix()).unwrap_or(&location);
+        format!("{base}{path}")
+    }
 }
 
 impl FromStr for Location {
@@ -141,6 +150,24 @@ impl fmt::Display for Location {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locates_folders_found_by_a_scan() {
+        let folder =
+            |location: &str, path: &str| location.parse::<Location>().unwrap().folder(path);
+        assert_eq!(
+            folder("s3://bucket/logs/", "logs/2024/"),
+            "s3://bucket/logs/2024/"
+        );
+        assert_eq!(folder("s3://bucket", "logs/"), "s3://bucket/logs/");
+        assert_eq!(folder("s3://", "bucket/logs/"), "s3://bucket/logs/");
+        assert_eq!(folder("gs://bucket/a/", "a/b/"), "gs://bucket/a/b/");
+        assert_eq!(folder("gs://", "bucket/"), "gs://bucket/");
+        assert_eq!(folder("az://acct/box/a/", "a/b/"), "az://acct/box/a/b/");
+        assert_eq!(folder("az://acct", "box/a/"), "az://acct/box/a/");
+        assert_eq!(folder("az://", "acct/box/"), "az://acct/box/");
+        assert_eq!(folder("s3://bucket/logs/", ""), "s3://bucket/");
+    }
 
     #[test]
     fn parses_by_scheme() {

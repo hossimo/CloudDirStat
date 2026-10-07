@@ -18,7 +18,7 @@ use crate::largest_files::{self, LargestFiles};
 use crate::legend;
 use crate::palette::{ColorMode, Colors};
 use crate::scan::{Scan, ScanRequest, ScanState};
-use crate::tree_view::TreeView;
+use crate::tree_view::{self, TreeView};
 use crate::treemap_view::{self, TreemapView};
 
 /// Time per frame spent moving scanned entries into the tree.
@@ -587,7 +587,7 @@ impl eframe::App for App {
             });
             match view.list {
                 ListTab::Folders => {
-                    let zoom = view.tree_view.show(
+                    let action = view.tree_view.show(
                         ui,
                         filtered,
                         root,
@@ -595,8 +595,14 @@ impl eframe::App for App {
                         colors,
                         &mut view.selected,
                     );
-                    if let Some(folder) = zoom {
-                        view.zoom = (folder != root).then_some(folder);
+                    match action {
+                        Some(tree_view::Action::Zoom(folder)) => {
+                            view.zoom = (folder != root).then_some(folder);
+                        }
+                        Some(tree_view::Action::SetLocation(folder)) => {
+                            self.location_input = scan.location.folder(&tree.path(folder));
+                        }
+                        None => {}
                     }
                 }
                 ListTab::LargestFiles => {

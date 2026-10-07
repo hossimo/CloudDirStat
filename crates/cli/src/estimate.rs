@@ -1,4 +1,6 @@
-use clouddirstat_core::{format_bytes, format_count, format_counted, format_usd};
+use clouddirstat_core::{
+    PRICE_NOTE, format_bytes, format_count, format_counted, format_usd, format_usd_fine,
+};
 use clouddirstat_providers::Location;
 use clouddirstat_providers::s3::{Estimate, S3Pricing, list_cost_usd};
 
@@ -21,11 +23,12 @@ pub fn print(location: &Location, estimate: &Estimate) {
         S3Pricing::published()
     );
     println!(
-        "A full scan needs about {} LIST requests (~${:.4}); this estimate cost ~${:.4}",
+        "A full scan needs about {} LIST requests (~{}); this estimate cost ~{}",
         format_count(estimate.list_requests()),
-        estimate.scan_cost_usd(),
-        estimate.request_cost_usd()
+        format_usd_fine(estimate.scan_cost_usd()),
+        format_usd_fine(estimate.request_cost_usd())
     );
+    println!("{PRICE_NOTE}");
 
     let classes = estimate.classes();
     if !classes.is_empty() {
@@ -56,7 +59,7 @@ pub fn print(location: &Location, estimate: &Estimate) {
                 format_bytes(bucket.bytes()),
                 bucket.objects.map_or_else(|| "-".to_owned(), format_count),
                 format_usd(bucket.monthly_cost),
-                format!("${:.4}", list_cost_usd(bucket.list_requests())),
+                format_usd_fine(list_cost_usd(bucket.list_requests())),
                 bucket
                     .as_of
                     .map_or_else(|| "no data".to_owned(), |date| date.to_string()),

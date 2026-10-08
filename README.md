@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/ci.yml)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/hossimo/CloudDirStat/total)
+[![Release](https://github.com/hossimo/CloudDirStat/actions/workflows/release.yml/badge.svg)](https://github.com/hossimo/CloudDirStat/actions/workflows/release.yml)
 
 **CloudDirStat is like the amazing [WinDirStat](https://windirstat.net/) (not affiliated) for cloud storage.** See what is using the space, and the money, in your Amazon S3, Google Cloud Storage, and Azure Blob Storage buckets.
 

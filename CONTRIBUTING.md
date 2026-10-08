@@ -88,14 +88,23 @@ Versions come from git tags: after `git tag v0.2.0`, builds report `0.2.0`, and 
 
 ## Making a release
 
-Create a release on GitHub with a new `vX.Y.Z` tag. Publishing it runs the **Release** workflow, which:
+Push a new `vX.Y.Z` tag:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The tag runs the **Release** workflow, which:
 
 - builds all six targets (Windows, macOS, and Linux, each on x64 and ARM64);
 - joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line;
-- attaches everything: two files for Mac, and one archive per Windows and Linux target;
+- attaches everything to the tag's release, creating a **draft** with generated notes if there isn't one yet: two files for Mac, and one archive per Windows and Linux target;
 - records a build provenance attestation for every file (see [Checking a download](README.md#checking-a-download)).
 
-A release's files can't be replaced by publishing again. To rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
+When the workflow is done, open the draft on the Releases page, edit the notes, and publish it. The files are already attached, so nobody sees a release without downloads. To write the notes first, create a draft for the tag on GitHub before pushing it; the workflow adds the files to that draft. (GitHub runs no workflows when a draft is created, so the tag push is what starts the build.)
+
+A tag push never replaces files already attached to a release. To rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
 
 ## License
 

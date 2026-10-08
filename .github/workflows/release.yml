@@ -1,11 +1,14 @@
 name: Release
 
-# Publishing a GitHub release builds both programs for Windows and Linux, a universal
-# macOS app (CloudDirStat.app in a DMG) and command line, and attaches them to it. Run it by hand to rebuild an existing release's assets
+# Pushing a vX.Y.Z tag builds both programs for Windows and Linux, a universal macOS app
+# (CloudDirStat.app in a DMG) and command line, and attaches them to that tag's release,
+# creating it as a draft if there isn't one yet. Publishing the draft is left to a person,
+# so the files are already there when it goes public. (GitHub runs no workflows for draft
+# releases, so the tag push is the trigger.) Run it by hand to rebuild a release's assets
 # (give its tag), or to test the build without a release (leave the tag empty).
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -17,7 +20,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
 
 jobs:
   build:
@@ -152,7 +155,7 @@ jobs:
 
   publish:
     needs: [build, macos]
-    if: github.event_name == 'release' || inputs.tag != ''
+    if: github.event_name == 'push' || inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -170,11 +173,18 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
-      # Only a rebuild run by hand may replace files already attached to the release.
+      # Uses a release already made for the tag (a draft with notes written ahead, or a
+      # published one being rebuilt), otherwise creates a draft. Only a rebuild run by hand
+      # may replace files already attached.
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          clobber=""
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then clobber="--clobber"; fi
-          gh release upload "$TAG" dist/* $clobber --repo "$GITHUB_REPOSITORY"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            clobber=""
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then clobber="--clobber"; fi
+            gh release upload "$TAG" dist/* $clobber
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag --title "$TAG" --generate-notes
+          fi

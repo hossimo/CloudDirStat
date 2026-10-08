@@ -251,12 +251,6 @@ impl App {
             }
             submitted |=
                 location.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            ui.separator();
-            submitted |= self.credentials.show_main_row(ui, provider);
-            ui.separator();
-            ui.checkbox(&mut self.include_versions, "Versions")
-                .on_hover_text(provider.versions_help());
-
             if self.is_scanning() {
                 if ui.button("Stop").clicked()
                     && let Some(scan) = &mut self.scan
@@ -269,6 +263,12 @@ impl App {
                     .on_disabled_hover_text(NO_SCHEME_HINT)
                     .clicked();
             }
+            ui.separator();
+            submitted |= self.credentials.show_main_row(ui, provider);
+            ui.separator();
+            ui.checkbox(&mut self.include_versions, "Versions")
+                .on_hover_text(provider.versions_help());
+
             let estimate_hint = if has_scheme {
                 "Estimates are only available for Amazon S3 so far."
             } else {

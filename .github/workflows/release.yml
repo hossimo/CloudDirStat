@@ -31,35 +31,35 @@ jobs:
         include:
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
           - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
-          - { target: x86_64-apple-darwin, os: macos-15-intel }
-          - { target: aarch64-apple-darwin, os: macos-latest }
           # Built on an older Ubuntu so the binaries also run on older glibc versions.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The &names let build-mac reuse these steps (*names) instead of repeating them.
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG || github.ref }}
           persist-credentials: false
           # Full history and tags, so the version comes from the release tag.
           fetch-depth: 0
       # Tags from before rust-toolchain.toml existed build with stable.
-      - name: Read the Rust version
+      - &rust-version
+        name: Read the Rust version
         shell: bash
         run: |
           version="$(grep -m1 '^channel' rust-toolchain.toml 2>/dev/null | cut -d '"' -f2)"
           echo "RUST_VERSION=${version:-stable}" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+      - &toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.target }}
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - &cargo-build
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # Mac builds are not packaged here: the macos job turns the two into one universal
-      # app and one universal command line.
       - name: Package
-        if: ${{ !contains(matrix.target, 'apple-darwin') }}
         shell: bash
         run: |
           target="${{ matrix.target }}"
@@ -82,16 +82,31 @@ jobs:
           fi
           rm -rf "$name"
 
-      - if: ${{ !contains(matrix.target, 'apple-darwin') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
+  # A separate job so the macos job can start as soon as both Mac builds are done:
+  # `needs` waits for every target of a matrix. They are not packaged here; the macos
+  # job turns the two into one universal app and one universal command line.
+  build-mac:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - *checkout
+      - *rust-version
+      - *toolchain
+      - *cargo-build
       # Only passed on to the macos job, so it doesn't need to be kept.
-      - if: contains(matrix.target, 'apple-darwin')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-${{ matrix.target }}
           path: |
@@ -104,7 +119,7 @@ jobs:
   # line (one universal binary in a tar.gz). Universal = runs natively on Apple
   # Silicon and Intel Macs, so nobody has to pick one.
   macos:
-    needs: build
+    needs: build-mac
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

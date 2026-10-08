@@ -25,7 +25,10 @@ pub const LONG_VERSION: &str = concat!(
 
 pub use date::Date;
 pub use filter::{Filtered, Subset};
-pub use format::{escape_control, format_bytes, format_count, format_counted, format_usd};
+pub use format::{
+    PRICE_NOTE, escape_control, format_bytes, format_count, format_counted, format_usd,
+    format_usd_fine,
+};
 pub use tree::{Node, NodeId, NodeKind, Tree, VersionState};
 pub use treemap::{Rect, squarify};
 

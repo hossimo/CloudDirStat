@@ -38,13 +38,23 @@ pub fn format_count(count: u64) -> String {
     formatted
 }
 
-/// Dollars with cents, e.g. `$1,234.56`. Tiny nonzero amounts show as `<$0.01`.
+/// Shown where costs appear, so they aren't mistaken for a bill or a local currency.
+pub const PRICE_NOTE: &str = "Costs are estimates at public list prices in US dollars, \
+     before tax, discounts, and free tiers.";
+
+/// US dollars with cents, e.g. `US$1,234.56`. Tiny nonzero amounts show as `<US$0.01`.
 pub fn format_usd(cost: Cost) -> String {
     let cents = (cost.usd() * 100.0).round() as u64;
     if cents == 0 && cost > Cost::ZERO {
-        return "<$0.01".to_owned();
+        return "<US$0.01".to_owned();
     }
-    format!("${}.{:02}", format_count(cents / 100), cents % 100)
+    format!("US${}.{:02}", format_count(cents / 100), cents % 100)
+}
+
+/// US dollars to four decimals, e.g. `US$0.0211`, for request costs that are often
+/// fractions of a cent.
+pub fn format_usd_fine(usd: f64) -> String {
+    format!("US${usd:.4}")
 }
 
 /// `text` with control characters and bidirectional formatting characters escaped
@@ -112,10 +122,11 @@ mod tests {
 
     #[test]
     fn formats_dollars_with_cents() {
-        assert_eq!(format_usd(Cost::ZERO), "$0.00");
-        assert_eq!(format_usd(Cost::from_usd(0.001)), "<$0.01");
-        assert_eq!(format_usd(Cost::from_usd(0.005)), "$0.01");
-        assert_eq!(format_usd(Cost::from_usd(1234.567)), "$1,234.57");
+        assert_eq!(format_usd(Cost::ZERO), "US$0.00");
+        assert_eq!(format_usd(Cost::from_usd(0.001)), "<US$0.01");
+        assert_eq!(format_usd(Cost::from_usd(0.005)), "US$0.01");
+        assert_eq!(format_usd(Cost::from_usd(1234.567)), "US$1,234.57");
+        assert_eq!(format_usd_fine(0.02112), "US$0.0211");
     }
 
     #[test]

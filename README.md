@@ -347,33 +347,34 @@ Example report:
 
 ```
 s3://my-backups/  6.8 GiB in 1,024 objects
-Scanned in 0.5s using 3 LIST requests (~$0.0000)
-Estimated storage cost ~$0.16/month (us-east-1 list prices from 2026-09-28)
+Scanned in 0.5s using 3 LIST requests (~US$0.0000)
+Estimated storage cost ~US$0.16/month (us-east-1 list prices from 2026-09-28)
+Costs are estimates at public list prices in US dollars, before tax, discounts, and free tiers.
 
 By storage class
-  STANDARD                  6.8 GiB  100.0%        $0.16/mo         1,024 objects
+  STANDARD                  6.8 GiB  100.0%      US$0.16/mo         1,024 objects
 
 Largest directories
-     6.8 GiB  100.0%        $0.16/mo  /
-     6.6 GiB   98.3%        $0.15/mo    backups/
-    11.2 MiB    0.2%       <$0.01/mo      db-snapshot-0412.tar.gz
-     6.6 GiB   97.5%        $0.15/mo      ... 1,016 more
-    83.5 MiB    1.2%       <$0.01/mo    archive.zip
+     6.8 GiB  100.0%      US$0.16/mo  /
+     6.6 GiB   98.3%      US$0.15/mo    backups/
+    11.2 MiB    0.2%     <US$0.01/mo      db-snapshot-0412.tar.gz
+     6.6 GiB   97.5%      US$0.15/mo      ... 1,016 more
+    83.5 MiB    1.2%     <US$0.01/mo    archive.zip
 
 Largest objects
-    83.5 MiB       <$0.01/mo  archive.zip
-    11.2 MiB       <$0.01/mo  backups/db-snapshot-0412.tar.gz
+    83.5 MiB     <US$0.01/mo  archive.zip
+    11.2 MiB     <US$0.01/mo  backups/db-snapshot-0412.tar.gz
 ```
 
 ## Costs
 
 ### What a scan costs
 
-Cloud providers charge a small fee for listing requests. Each request returns up to 1,000 objects (5,000 on Azure), so scanning 10 million S3 objects costs roughly $0.05. Every scan reports how many requests it made and what they cost at list prices.
+Cloud providers charge a small fee for listing requests. Each request returns up to 1,000 objects (5,000 on Azure), so scanning 10 million S3 objects costs roughly US$0.05. Every scan reports how many requests it made and what they cost at list prices.
 
 ### How storage costs are estimated
 
-The **Cost/mo** figures estimate what keeping the files stored costs per month, from each provider's public list prices for the bucket's region (and, on Azure, the account's redundancy). The prices are built into the program, so estimating needs no extra permissions or network calls; the price list's date is shown with every estimate.
+The **Cost/mo** figures estimate what keeping the files stored costs per month, from each provider's public list prices for the bucket's region (and, on Azure, the account's redundancy). The prices are built into the program, so estimating needs no extra permissions or network calls; the price list's date is shown with every estimate. Amounts are in US dollars (shown as US$), the currency all three providers publish their prices in, whatever country you are billed in.
 
 - Each storage class is priced at its own rate. For S3 this includes the 128 KB minimum billed size of the Infrequent Access classes, the per-object overhead of Glacier and Deep Archive, and the Intelligent-Tiering monitoring fee.
 - Old versions count when **Versions** is on; S3 delete markers are free.
@@ -385,11 +386,12 @@ S3 reports each bucket's size per storage class and object count to CloudWatch o
 
 ```
 s3://  2.9 TiB in 4,210,332 objects (CloudWatch, 2026-09-27)
-Estimated storage cost ~$41.18/month (list prices from 2026-09-28)
-A full scan needs about 4,225 LIST requests (~$0.0211); this estimate cost ~$0.0016
+Estimated storage cost ~US$41.18/month (list prices from 2026-09-28)
+A full scan needs about 4,225 LIST requests (~US$0.0211); this estimate cost ~US$0.0016
+Costs are estimates at public list prices in US dollars, before tax, discounts, and free tiers.
 ```
 
-- It needs the `cloudwatch:GetMetricData` permission and costs about $0.0003 per bucket.
+- It needs the `cloudwatch:GetMetricData` permission and costs about US$0.0003 per bucket.
 - The figures are a day or two old and cover whole buckets, not folders. Object counts include every version, so a scan without **Versions** may list fewer.
 - Intelligent-Tiering is priced per access tier here, since CloudWatch reports bytes per tier.
 

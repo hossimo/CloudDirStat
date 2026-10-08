@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use clouddirstat_core::Pricing;
 use clouddirstat_core::{
-    EntryKind, NodeId, NodeKind, Tree, Usage, escape_control, format_bytes, format_count,
-    format_counted, format_usd,
+    EntryKind, NodeId, NodeKind, PRICE_NOTE, Tree, Usage, escape_control, format_bytes,
+    format_count, format_counted, format_usd, format_usd_fine,
 };
 use clouddirstat_providers::{Location, ScanStats};
 
@@ -42,16 +42,17 @@ impl Report<'_> {
             format_counted(total.objects, "object")
         );
         println!(
-            "Scanned in {:.1}s using {} LIST requests (~${:.4})",
+            "Scanned in {:.1}s using {} LIST requests (~{})",
             self.elapsed.as_secs_f64(),
             format_count(self.stats.list_requests),
-            self.stats.estimated_cost_usd()
+            format_usd_fine(self.stats.estimated_cost_usd())
         );
         println!(
             "Estimated storage cost ~{}/month ({})",
             format_usd(total.monthly_cost),
             self.pricing.source()
         );
+        println!("{PRICE_NOTE}");
 
         let uploads = self.tree.usage_by_kind(EntryKind::IncompleteUpload);
         if uploads.objects > 0 {

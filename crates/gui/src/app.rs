@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use clouddirstat_core::{
-    EntryKind, Filtered, NodeId, Subset, Tree, format_bytes, format_count, format_counted,
-    format_usd,
+    EntryKind, Filtered, NodeId, PRICE_NOTE, Subset, Tree, format_bytes, format_count,
+    format_counted, format_usd, format_usd_fine,
 };
 use clouddirstat_providers::{Location, Provider, ScanStats};
 use eframe::egui;
@@ -388,7 +388,7 @@ impl App {
         }
         if let Some(pricing) = &scan.pricing {
             ui.label(format!("~{}/mo", format_usd(total.monthly_cost)))
-                .on_hover_text(pricing.notes());
+                .on_hover_text(format!("{}\n\n{PRICE_NOTE}", pricing.notes()));
             ui.separator();
         }
         match &scan.state {
@@ -417,9 +417,9 @@ impl App {
                     ui,
                     format!(
                         "{summary}  ·  scanned in {elapsed:.1}s using {} LIST requests \
-                             (~${:.4})",
+                             (~{})",
                         format_count(stats.list_requests),
-                        stats.estimated_cost_usd()
+                        format_usd_fine(stats.estimated_cost_usd())
                     ),
                 );
             }

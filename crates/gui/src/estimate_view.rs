@@ -1,6 +1,8 @@
 //! The Estimate window: bucket totals and scan cost from CloudWatch, without listing.
 
-use clouddirstat_core::{format_bytes, format_count, format_counted, format_usd};
+use clouddirstat_core::{
+    PRICE_NOTE, format_bytes, format_count, format_counted, format_usd, format_usd_fine,
+};
 use clouddirstat_providers::s3::{Estimate, S3Pricing, list_cost_usd};
 use eframe::egui::{self, Align, Label, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
@@ -18,7 +20,7 @@ const EMBEDDED_TABLE_HEIGHT: f32 = 320.0;
 /// Bucket names can be 63 characters; past this they are truncated (the column resizes).
 const MAX_BUCKET_WIDTH: f32 = 360.0;
 /// Fixed widths of Size, Objects, Cost/mo, Scan cost, and As of.
-const NUMBER_COLUMNS: [f32; 5] = [80.0, 90.0, 80.0, 80.0, 90.0];
+const NUMBER_COLUMNS: [f32; 5] = [80.0, 90.0, 100.0, 90.0, 90.0];
 /// Window margins, the gaps between table columns, and the scroll bar.
 const WINDOW_PADDING: f32 = 40.0;
 const MAX_FITTED_HEIGHT: f32 = 760.0;
@@ -195,14 +197,14 @@ fn summary(
         .heading(),
     );
     ui.label(format!(
-        "A full scan needs about {} LIST requests (~${:.4}).",
+        "A full scan needs about {} LIST requests (~{}).",
         format_count(estimate.list_requests()),
-        estimate.scan_cost_usd()
+        format_usd_fine(estimate.scan_cost_usd())
     ));
     ui.weak(format!(
-        "From CloudWatch as of {as_of}; this estimate cost ~${:.4}. Storage cost at {} \
-         list prices.",
-        estimate.request_cost_usd(),
+        "From CloudWatch as of {as_of}; this estimate cost ~{}. Storage cost at {} \
+         list prices. {PRICE_NOTE}",
+        format_usd_fine(estimate.request_cost_usd()),
         S3Pricing::published()
     ));
     if !request.location.prefix().is_empty() {
@@ -307,7 +309,7 @@ fn bucket_table(ui: &mut egui::Ui, estimate: &Estimate, max_height: f32) -> Opti
                 });
                 row.col(|ui| right_aligned(ui, format_usd(bucket.monthly_cost)));
                 row.col(|ui| {
-                    right_aligned(ui, format!("${:.4}", list_cost_usd(bucket.list_requests())));
+                    right_aligned(ui, format_usd_fine(list_cost_usd(bucket.list_requests())));
                 });
                 row.col(|ui| {
                     let as_of = bucket

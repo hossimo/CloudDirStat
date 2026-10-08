@@ -11,6 +11,8 @@ Usage: python scripts/update_azure_prices.py
 
 import datetime
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -26,11 +28,29 @@ REDUNDANCIES = ["LRS", "ZRS", "GRS", "RA-GRS", "GZRS", "RA-GZRS"]
 LIST_METER = " List and Create Container Operations"
 
 
+def fetch_json(url, attempts=6):
+    """GETs a page, waiting and retrying when the API is busy (429) or failing (5xx)."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(url) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            busy = error.code == 429 or error.code >= 500
+            if not busy or attempt == attempts:
+                raise
+            retry_after = error.headers.get("Retry-After", "")
+            wait = int(retry_after) if retry_after.isdigit() else min(5 * 2 ** (attempt - 1), 60)
+            print(f"HTTP {error.code}, retrying in {wait}s ({attempt}/{attempts - 1})", flush=True)
+            time.sleep(wait)
+
+
 def items():
     url = API + "?" + urllib.parse.urlencode({"$filter": FILTER})
+    pages = 0
     while url:
-        with urllib.request.urlopen(url) as response:
-            page = json.load(response)
+        page = fetch_json(url)
+        pages += 1
+        print(f"fetched page {pages}", flush=True)
         yield from page["Items"]
         url = page.get("NextPageLink")
 

@@ -58,7 +58,13 @@ cargo run --release -p clouddirstat-core --features demo --example treemap -- 50
 
 ## Price tables
 
-The built-in prices are generated from the providers' public price lists (no credentials needed):
+The built-in prices are generated from the providers' public price lists (no credentials needed). Refresh all three before a release:
+
+```sh
+python scripts/update_prices.py
+```
+
+It runs the three scripts below, keeps going if one fails, and ends with a summary: which failed (their old table stays as it was) and which have new prices rather than only a new date. It exits with status 1 if any failed. Review the result with `git diff crates/providers/src`, then commit it. Each script can also be run on its own:
 
 ```sh
 python scripts/update_s3_prices.py

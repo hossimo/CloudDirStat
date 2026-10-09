@@ -110,9 +110,9 @@ impl Location {
         Some(bucket.as_str()).filter(|bucket| !bucket.is_empty())
     }
 
-    /// The location of a folder found by this scan, given its path as the scan's keys
-    /// spell it: below the bucket, or below the scheme (or account) when the scan
-    /// covered several buckets, containers, or accounts.
+    /// The location (URI) of a folder or object found by this scan, given its path as the
+    /// scan's keys spell it: below the bucket, or below the scheme (or account) when the
+    /// scan covered several buckets, containers, or accounts.
     pub fn folder(&self, path: &str) -> String {
         let location = self.to_string();
         let base = location.strip_suffix(self.prefix()).unwrap_or(&location);
@@ -167,6 +167,8 @@ mod tests {
         assert_eq!(folder("az://acct", "box/a/"), "az://acct/box/a/");
         assert_eq!(folder("az://", "acct/box/"), "az://acct/box/");
         assert_eq!(folder("s3://bucket/logs/", ""), "s3://bucket/");
+        assert_eq!(folder("s3://", "bucket/a/b.txt"), "s3://bucket/a/b.txt");
+        assert_eq!(folder("az://acct/box", "a/b.txt"), "az://acct/box/a/b.txt");
     }
 
     #[test]

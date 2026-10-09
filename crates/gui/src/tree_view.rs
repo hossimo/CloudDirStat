@@ -25,6 +25,8 @@ pub enum Action {
     Zoom(NodeId),
     /// Put this folder in the Location field.
     SetLocation(NodeId),
+    /// Copy this item's URI (`s3://bucket/key` and so on) to the clipboard.
+    CopyUri(NodeId),
 }
 
 /// The folder list: one row per visible node, children sorted largest first.
@@ -184,11 +186,12 @@ impl TreeView {
                     if response.clicked() {
                         *selected = Some(row.id);
                     }
-                    if node.kind() == NodeKind::Directory {
-                        if response.double_clicked() {
-                            action = Some(Action::Zoom(row.id));
-                        }
-                        response.context_menu(|ui| {
+                    let is_folder = node.kind() == NodeKind::Directory;
+                    if is_folder && response.double_clicked() {
+                        action = Some(Action::Zoom(row.id));
+                    }
+                    response.context_menu(|ui| {
+                        if is_folder {
                             if ui.button("Zoom treemap here (double-click)").clicked() {
                                 action = Some(Action::Zoom(row.id));
                                 ui.close();
@@ -197,8 +200,12 @@ impl TreeView {
                                 action = Some(Action::SetLocation(row.id));
                                 ui.close();
                             }
-                        });
-                    }
+                        }
+                        if ui.button("Copy URI").clicked() {
+                            action = Some(Action::CopyUri(row.id));
+                            ui.close();
+                        }
+                    });
                 });
             });
 

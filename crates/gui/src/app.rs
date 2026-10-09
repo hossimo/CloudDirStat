@@ -490,6 +490,9 @@ impl eframe::App for App {
         };
         let tree = &scan.tree;
         let root = scan.root();
+        // The folder the views start at, which for a location ending in a file name is
+        // the folder holding it rather than the location as typed.
+        let root_label = scan.location.folder(&tree.path(root));
         let filtered = Filtered::new(tree, view.subset.as_ref());
         // The subset catches up with a new filter on the next refresh.
         let filter_pending = view.filter.is_some() != view.subset.is_some();
@@ -507,9 +510,7 @@ impl eframe::App for App {
                 // Always leave a few rows of the folder list visible.
                 .max_size(available * 0.8)
                 .show(ui, |ui| {
-                    if let Some(zoom) =
-                        zoom_bar(ui, tree, root, &scan.location.to_string(), view.zoom)
-                    {
+                    if let Some(zoom) = zoom_bar(ui, tree, root, &root_label, view.zoom) {
                         view.zoom = zoom;
                     }
                     let map_root = view.zoom.unwrap_or(root);
@@ -591,7 +592,7 @@ impl eframe::App for App {
                         ui,
                         filtered,
                         root,
-                        &scan.location.to_string(),
+                        &root_label,
                         colors,
                         &mut view.selected,
                     );
@@ -601,6 +602,9 @@ impl eframe::App for App {
                         }
                         Some(tree_view::Action::SetLocation(folder)) => {
                             self.location_input = scan.location.folder(&tree.path(folder));
+                        }
+                        Some(tree_view::Action::CopyUri(id)) => {
+                            ui.ctx().copy_text(scan.location.folder(&tree.path(id)));
                         }
                         None => {}
                     }
@@ -619,6 +623,9 @@ impl eframe::App for App {
                             view.selected = Some(file);
                             view.tree_view.reveal(tree, file);
                             view.list = ListTab::Folders;
+                        }
+                        Some(largest_files::Action::CopyUri(file)) => {
+                            ui.ctx().copy_text(scan.location.folder(&tree.path(file)));
                         }
                         None => {}
                     }

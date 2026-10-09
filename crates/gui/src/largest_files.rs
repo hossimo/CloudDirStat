@@ -35,6 +35,8 @@ pub enum Action {
     Select(NodeId),
     /// Double-click: select it and show it in the folder list.
     Reveal(NodeId),
+    /// Copy the file's URI (`s3://bucket/key` and so on) to the clipboard.
+    CopyUri(NodeId),
 }
 
 impl Default for LargestFiles {
@@ -139,6 +141,16 @@ impl LargestFiles {
                             } else if response.clicked() {
                                 action = Some(Action::Select(file));
                             }
+                            response.context_menu(|ui| {
+                                if ui.button("Show in folder list (double-click)").clicked() {
+                                    action = Some(Action::Reveal(file));
+                                    ui.close();
+                                }
+                                if ui.button("Copy URI").clicked() {
+                                    action = Some(Action::CopyUri(file));
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 });

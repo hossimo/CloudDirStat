@@ -26,7 +26,7 @@ Thanks for your interest! Bug reports, test results from real Google Cloud and A
 
 ```sh
 cargo run -p clouddirstat -- scan s3://my-bucket
-cargo run -p clouddirstat-gui
+cargo run -p clouddirstat-gui   # or the alias: cargo gui
 cargo test --workspace --all-features
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -78,6 +78,7 @@ Build the app with the `demo` feature to scan made-up buckets instead of a real 
 
 ```sh
 cargo run --release -p clouddirstat-gui --features demo -- s3://
+cargo demo s3://   # the same, via the alias in .cargo/config.toml
 ```
 
 `s3://` shows six fictional `acme-*` buckets; `s3://acme-backups/` shows one. The data is the same every time; set `CLOUDDIRSTAT_DEMO_OBJECTS` for more or fewer objects (default 120,000).

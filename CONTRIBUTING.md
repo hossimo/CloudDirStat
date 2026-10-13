@@ -100,12 +100,24 @@ The tag runs the **Release** workflow, which:
 
 - builds all six targets (Windows, macOS, and Linux, each on x64 and ARM64);
 - joins the two Mac builds into a universal `CloudDirStat.app` in a DMG (`scripts/macos_app.sh`, which also runs on any Mac) and a universal command line;
-- attaches everything to the tag's release, creating a **draft** with generated notes if there isn't one yet: two files for Mac, and one archive per Windows and Linux target;
+- builds a Windows installer for each Windows target (`scripts/windows_installer.iss`, [Inno Setup](https://jrsoftware.org/isinfo.php)), and checks it by installing, running, and uninstalling it;
+- attaches everything to the tag's release, creating a **draft** with generated notes if there isn't one yet: two files for Mac, an installer and an archive per Windows target, and an archive per Linux target;
 - records a build provenance attestation for every file (see [Checking a download](README.md#checking-a-download)).
 
 When the workflow is done, open the draft on the Releases page, edit the notes, and publish it. The files are already attached, so nobody sees a release without downloads. To write the notes first, create a draft for the tag on GitHub before pushing it; the workflow adds the files to that draft. (GitHub runs no workflows when a draft is created, so the tag push is what starts the build.)
 
 A tag push never replaces files already attached to a release. To rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
+
+### The Windows installer
+
+`scripts/windows_installer.iss` is the whole installer. To build one locally, install [Inno Setup 7](https://jrsoftware.org/isdl.php), build the release programs, and run its compiler from the repository root:
+
+```powershell
+cargo build --release --locked
+& "C:\Program Files\Inno Setup 7\ISCC.exe" /DVersion=1.2.3 /DArch=x64 scripts\windows_installer.iss
+```
+
+The installer lands in `dist\`. Run it with `/CURRENTUSER` or `/ALLUSERS` to skip the question, and `/VERYSILENT` to show nothing. The workflow pins the Inno Setup download (`INNO_URL` and `INNO_SHA256` in `release.yml`); to update it, download the new version, check its signature (Pyrsys B.V.), and replace both. Never change `AppId` in the script: Windows and winget use it to find the installed copy to upgrade or remove.
 
 ## License
 

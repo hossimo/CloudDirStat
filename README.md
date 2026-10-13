@@ -47,7 +47,8 @@ Download the latest [release](https://github.com/hossimo/CloudDirStat/releases) 
 
 | System | Download | Contains |
 |---|---|---|
-| **Windows** (x64 or ARM64) | `clouddirstat-…-windows-msvc.zip` | `clouddirstat-gui` (the app) and `clouddirstat` (the command line) |
+| **Windows** (x64 or ARM64) | `CloudDirStat-…-windows-x64-setup.exe` or `…-arm64-setup.exe` | An installer for the app and the command line. It asks whether to install for all users (Program Files) or only you (no administrator rights needed), adds `clouddirstat` to PATH, and uninstalls from **Settings → Apps**. |
+| | `clouddirstat-…-windows-msvc.zip` | The same two programs without an installer: `clouddirstat-gui` (the app) and `clouddirstat` (the command line) |
 | **Linux** (x64 or ARM64) | `clouddirstat-…-linux-gnu.tar.gz` | `clouddirstat-gui` (the app) and `clouddirstat` (the command line) |
 | **Mac** (Apple Silicon and Intel) | `CloudDirStat-…-macos.dmg` | The app. Open it and drag **CloudDirStat** to **Applications**. |
 | | `clouddirstat-…-macos.tar.gz` | The command line, a separate download (see [On a Mac](#on-a-mac)) |

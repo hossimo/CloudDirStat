@@ -108,6 +108,12 @@ When the workflow is done, open the draft on the Releases page, edit the notes, 
 
 A tag push never replaces files already attached to a release. To rebuild them, run the workflow by hand from the Actions tab with that tag, which replaces them. With no tag it only builds, which is useful for testing. Actions are pinned to commit SHAs, which Dependabot keeps up to date.
 
+### Winget
+
+Publishing a full release (or turning a pre-release into one) runs the **Winget** workflow, which uses [Komac](https://github.com/russellbanks/Komac) to open a pull request at [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) adding the new version of `Downrighttech.CloudDirStat`. Drafts and pre-releases are skipped. Publish only after the Release workflow has attached the installers; if it hasn't, the Winget run stops with an error, and running it by hand from the Actions tab with the tag retries it. Its **dry run** option builds the manifests without opening a pull request.
+
+It needs a `WINGET_TOKEN` repository secret: a classic GitHub token with the `public_repo` scope, from the account whose winget-pkgs fork the pull requests come from. Winget pins each installer's hash, so never replace a release's files after its winget pull request is open.
+
 ### The Windows installer
 
 `scripts/windows_installer.iss` is the whole installer. To build one locally, install [Inno Setup 7](https://jrsoftware.org/isdl.php), build the release programs, and run its compiler from the repository root:

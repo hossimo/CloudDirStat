@@ -82,6 +82,36 @@ jobs:
           fi
           rm -rf "$name"
 
+      # Installs for all users (Program Files) or only the current one; see the script.
+      - name: Build the Windows installer
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        env:
+          INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe
+          INNO_SHA256: 0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f
+        run: |
+          $target = "${{ matrix.target }}"
+          $arch = if ($target -like "aarch64*") { "arm64" } else { "x64" }
+          $version = $env:TAG -replace "^v", ""
+          if (-not $version) { $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value }
+          $name = "CloudDirStat-$(if ($env:TAG) { $env:TAG } else { 'dev' })-windows-$arch-setup"
+
+          $inno = "$env:RUNNER_TEMP\innosetup.exe"
+          Invoke-WebRequest $env:INNO_URL -OutFile $inno
+          if ((Get-FileHash $inno -Algorithm SHA256).Hash -ne $env:INNO_SHA256) { throw "Inno Setup download doesn't match INNO_SHA256" }
+          Start-Process -Wait $inno -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/DIR=$env:RUNNER_TEMP\inno"
+
+          & "$env:RUNNER_TEMP\inno\ISCC.exe" /Q "/DVersion=$version" "/DArch=$arch" `
+            "/DSourceDir=$PWD\target\$target\release" "/DOutputName=$name" scripts\windows_installer.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+          # Install for the current user, run the command line, and uninstall, to catch a broken installer.
+          $app = "$env:RUNNER_TEMP\installed"
+          Start-Process -Wait "dist\$name.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/DIR=$app"
+          & "$app\clouddirstat.exe" --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Start-Process -Wait "$app\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.target }}

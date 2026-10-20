@@ -1,8 +1,3 @@
 [alias]
 gui = "run -p clouddirstat-gui"
 demo = "run --release -p clouddirstat-gui --features demo --"
-
-# Link the C runtime into the Windows programs, so they start on PCs without the
-# Visual C++ Redistributable (VCRUNTIME140.dll), such as a fresh Windows install.
-[target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "target-feature=+crt-static"]

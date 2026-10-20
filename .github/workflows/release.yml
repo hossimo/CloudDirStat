@@ -56,7 +56,15 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.target }}
+      # Link the C runtime into the Windows programs, so they start on PCs without the
+      # Visual C++ Redistributable (VCRUNTIME140.dll), such as a fresh Windows install.
+      # Set here rather than in .cargo/config.toml: with --target, the flag reaches only
+      # the programs, while without it (cargo build, cargo gui) it would also reach the
+      # proc macros, which then fail to load ("can't find crate for `rustversion`").
       - &cargo-build
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+          CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package

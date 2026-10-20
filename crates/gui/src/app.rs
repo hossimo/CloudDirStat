@@ -212,9 +212,10 @@ impl App {
     }
 
     /// The provider of the location being typed, going by its scheme, so the sign-in
-    /// fields match it even before the location is complete.
-    fn provider(&self) -> Provider {
-        cloud_picker::provider_of(&self.location_input).unwrap_or(Provider::S3)
+    /// fields match it even before the location is complete. None until a known scheme
+    /// is typed.
+    fn provider(&self) -> Option<Provider> {
+        cloud_picker::provider_of(&self.location_input)
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -222,10 +223,7 @@ impl App {
         let mut submitted = false;
         let mut scan_clicked = false;
         let mut estimate_clicked = false;
-        let has_scheme = matches!(
-            cloud_picker::scheme_of(&self.location_input),
-            Scheme::Known(_)
-        );
+        let has_scheme = provider.is_some();
         // Wraps onto a second line in a narrow window instead of running off the edge.
         ui.horizontal_wrapped(|ui| {
             ui.label("Location");
@@ -264,10 +262,14 @@ impl App {
                     .clicked();
             }
             ui.separator();
-            submitted |= self.credentials.show_main_row(ui, provider);
-            ui.separator();
+            if let Some(provider) = provider {
+                submitted |= self.credentials.show_main_row(ui, provider);
+                ui.separator();
+            }
             ui.checkbox(&mut self.include_versions, "Versions")
-                .on_hover_text(provider.versions_help());
+                .on_hover_text(
+                    provider.map_or("Include noncurrent versions", Provider::versions_help),
+                );
 
             let estimate_hint = if has_scheme {
                 "Estimates are only available for Amazon S3 so far."
@@ -276,7 +278,7 @@ impl App {
             };
             estimate_clicked = ui
                 .add_enabled(
-                    has_scheme && provider == Provider::S3,
+                    provider == Some(Provider::S3),
                     egui::Button::new("Estimate"),
                 )
                 .on_hover_text(
@@ -294,7 +296,9 @@ impl App {
                 self.help.toggle();
             }
         });
-        submitted |= self.credentials.show_secret_row(ui, provider);
+        if let Some(provider) = provider {
+            submitted |= self.credentials.show_secret_row(ui, provider);
+        }
 
         if (scan_clicked || submitted) && has_scheme && !self.is_scanning() {
             self.start_scan_from_inputs(ui.ctx());
@@ -343,9 +347,10 @@ impl App {
         match error_view::window(ctx, &problem, &mut self.error_open) {
             Some(error_view::Action::Help) => self.help.open(),
             Some(error_view::Action::ClearLocation) => {
-                self.location_input = self.provider().scheme().to_owned();
+                let provider = self.provider();
+                self.location_input = provider.map_or("", Provider::scheme).to_owned();
                 focus_at_end(ctx, &self.location_input);
-                if !self.is_scanning() {
+                if provider.is_some() && !self.is_scanning() {
                     self.start_scan_from_inputs(ctx);
                 }
             }

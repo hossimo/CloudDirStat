@@ -14,7 +14,7 @@ const CORNER: u8 = 4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scheme {
     Known(Provider),
-    /// No `://` at all; locations without a scheme are read as S3.
+    /// No `://` at all, so no cloud is chosen yet.
     Missing,
     /// A `://` scheme that isn't `s3`, `gs`, or `az`.
     Unknown,
@@ -27,12 +27,11 @@ pub fn scheme_of(location: &str) -> Scheme {
     }
 }
 
-/// The cloud a location is for, as it would be scanned; `None` for an unknown scheme.
+/// The cloud a location is for; `None` until it starts with a known scheme.
 pub fn provider_of(location: &str) -> Option<Provider> {
     match scheme_of(location) {
         Scheme::Known(provider) => Some(provider),
-        Scheme::Missing => Some(Provider::S3),
-        Scheme::Unknown => None,
+        Scheme::Missing | Scheme::Unknown => None,
     }
 }
 
@@ -55,8 +54,7 @@ pub fn show(ui: &mut egui::Ui, location: &mut String) -> bool {
         for (index, provider) in Provider::ALL.into_iter().enumerate() {
             let selected = current == Some(provider);
             let response = segment(ui, provider, selected, index == 0, index == last);
-            // Clicking the cloud that is only implied (no scheme typed yet) writes it in.
-            if response.clicked() && scheme_of(location) != Scheme::Known(provider) {
+            if response.clicked() && !selected {
                 *location = with_scheme(location, provider);
                 changed = true;
             }
@@ -200,7 +198,9 @@ mod tests {
         assert_eq!(scheme_of("bucket/logs/"), Scheme::Missing);
         assert_eq!(scheme_of(""), Scheme::Missing);
         assert_eq!(scheme_of("ftp://host/x"), Scheme::Unknown);
-        assert_eq!(provider_of("bucket/logs/"), Some(Provider::S3));
+        assert_eq!(provider_of("s3://bucket/logs/"), Some(Provider::S3));
+        assert_eq!(provider_of("bucket/logs/"), None);
+        assert_eq!(provider_of(""), None);
         assert_eq!(provider_of("s4://bucket"), None);
     }
 

@@ -403,6 +403,10 @@ When a large upload fails or is abandoned, the parts already uploaded stay in th
 
 ## Troubleshooting
 
+### The app
+
+**`CloudDirStat could not open its window`.** The app draws with OpenGL 2.0 or newer. Virtual machines and remote desktop sessions without a graphics driver often lack it; updating the graphics driver usually fixes it. The command line (`clouddirstat`) works without it.
+
 ### AWS
 
 **`could not parse profile file`.** The AWS SDK used by CloudDirStat is stricter than the AWS CLI about `~/.aws/config` and `~/.aws/credentials`. The usual cause is a setting indented directly under a profile header:

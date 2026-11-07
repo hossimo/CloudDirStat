@@ -19,6 +19,11 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "
 # Scans made-up demo buckets instead of AWS, for screenshots. Never in release builds.
 demo = ["clouddirstat-core/demo"]
 
+# Message box when the window cannot open (a release build has no console). Already in
+# the build through winit.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] }
+
 # Build-time only: embeds icons/clouddirstat.ico into the Windows executable.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.31"

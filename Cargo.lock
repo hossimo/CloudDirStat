@@ -1043,6 +1043,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "tokio",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 

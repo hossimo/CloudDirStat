@@ -17,6 +17,8 @@ mod scan;
 mod tree_view;
 mod treemap_view;
 
+use std::cell::Cell;
+
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use clouddirstat_providers::azure::AzureCredentials;
@@ -77,10 +79,12 @@ fn main() -> Result<()> {
         ),
         ..Default::default()
     };
-    eframe::run_native(
+    let started = Cell::new(false);
+    let result = eframe::run_native(
         "CloudDirStat",
         options,
-        Box::new(move |creation| {
+        Box::new(|creation| {
+            started.set(true);
             Ok(Box::new(App::new(
                 runtime,
                 &creation.egui_ctx,
@@ -89,8 +93,42 @@ fn main() -> Result<()> {
                 initial_scan,
             )))
         }),
-    )
-    .map_err(|error| anyhow!("could not start the GUI: {error}"))
+    );
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if started.get() => Err(anyhow!("the GUI stopped: {error}")),
+        Err(error) => {
+            let message = format!(
+                "CloudDirStat could not open its window.\n\n{error}\n\nIt needs OpenGL 2.0 \
+                 or newer. Virtual machines and remote desktop sessions without a graphics \
+                 driver often lack it; updating the graphics driver usually helps.\n\n\
+                 Report a problem: https://github.com/hossimo/CloudDirStat/issues"
+            );
+            #[cfg(windows)]
+            show_error_box(&message);
+            Err(anyhow!(message))
+        }
+    }
+}
+
+/// A release build on Windows has no console, so an error would otherwise vanish.
+#[cfg(windows)]
+fn show_error_box(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (text, caption) = (wide(message), wide("CloudDirStat"));
+    // SAFETY: both strings are NUL-terminated and outlive the call; no owner window.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        )
+    };
 }
 
 /// Sets the window and taskbar icon. A broken icon file only costs the icon.

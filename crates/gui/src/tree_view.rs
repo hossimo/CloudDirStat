@@ -15,7 +15,7 @@ const MIN_NAME_WIDTH: f32 = 150.0;
 const NUMBER_COLUMNS: [f32; 5] = [110.0, 70.0, 90.0, 100.0, 90.0];
 /// Last modified is last and fills the leftover width, but starts about this wide.
 const LAST_MODIFIED_WIDTH: f32 = 100.0;
-/// Items listed per folder before a "more" row; each click on it shows this many more.
+/// Items listed per folder before a "more" row; "Show more" on it shows this many more.
 /// Keeps a folder with millions of objects from becoming millions of rows.
 const ROWS_PER_FOLDER: usize = 1000;
 
@@ -34,12 +34,20 @@ pub enum Action {
 pub struct TreeView {
     root: Option<NodeId>,
     expanded: HashSet<NodeId>,
-    /// Items shown in folders where the user asked for more than [`ROWS_PER_FOLDER`].
+    /// Items shown in folders where the user asked for more than [`ROWS_PER_FOLDER`];
+    /// `usize::MAX` after "Show all".
     shown: HashMap<NodeId, usize>,
     rows: Vec<Row>,
     stale: bool,
     /// A row to bring into view, and where: centered, or just enough to be visible.
     scroll_to: Option<(NodeId, Option<Align>)>,
+}
+
+/// What a click on a "more" row asks for.
+#[derive(Clone, Copy)]
+enum ShowMore {
+    Next,
+    All,
 }
 
 #[derive(Clone, Copy)]
@@ -86,7 +94,7 @@ impl TreeView {
         if self.stale {
             self.rebuild_rows(view, root);
         }
-        self.arrow_keys(ui, tree, root, selected);
+        self.keys(ui, tree, root, selected);
         if self.stale {
             self.rebuild_rows(view, root);
         }
@@ -145,8 +153,10 @@ impl TreeView {
                     let row = self.rows[table_row.index()];
                     if let Some((hidden, usage)) = row.more {
                         let parent_bytes = view.usage(row.id).bytes;
-                        if more_row(&mut table_row, row.depth, hidden, usage, parent_bytes) {
-                            show_more = Some(row.id);
+                        if let Some(more) =
+                            more_row(&mut table_row, row.depth, hidden, usage, parent_bytes)
+                        {
+                            show_more = Some((row.id, more));
                         }
                         return;
                     }
@@ -215,45 +225,82 @@ impl TreeView {
             }
             self.stale = true;
         }
-        if let Some(folder) = show_more {
-            *self.shown.entry(folder).or_insert(ROWS_PER_FOLDER) += ROWS_PER_FOLDER;
+        if let Some((folder, more)) = show_more {
+            let shown = self.shown.entry(folder).or_insert(ROWS_PER_FOLDER);
+            *shown = match more {
+                ShowMore::Next => shown.saturating_add(ROWS_PER_FOLDER),
+                ShowMore::All => usize::MAX,
+            };
             self.stale = true;
         }
         action
     }
 
-    /// With an item selected and no text field taking the keyboard, Up and Down select the
-    /// previous and next item, Right opens a folder (or goes to its first item when
-    /// open), and Left closes it (or goes to the folder above).
-    fn arrow_keys(
-        &mut self,
-        ui: &egui::Ui,
-        tree: &Tree,
-        root: NodeId,
-        selected: &mut Option<NodeId>,
-    ) {
-        let Some(current) = *selected else {
-            return;
-        };
+    /// With no text field taking the keyboard, Home and End select the first and last
+    /// item, and Page Up and Page Down move the selection by one screenful. With an item
+    /// selected, Up and Down select the previous and next item, Right opens a folder (or
+    /// goes to its first item when open), and Left closes it (or goes to the folder above).
+    fn keys(&mut self, ui: &egui::Ui, tree: &Tree, root: NodeId, selected: &mut Option<NodeId>) {
         if ui.ctx().egui_wants_keyboard_input() {
             return;
         }
-        let Some(index) = self.row_of(current) else {
-            return;
-        };
         let key = ui.input_mut(|input| {
             [
                 Key::ArrowUp,
                 Key::ArrowDown,
                 Key::ArrowLeft,
                 Key::ArrowRight,
+                Key::Home,
+                Key::End,
+                Key::PageUp,
+                Key::PageDown,
             ]
             .into_iter()
             .find(|key| input.consume_key(egui::Modifiers::NONE, *key))
         });
+        // One row less for the header and one so the old edge row stays in view.
+        let page = ((ui.available_height() / ROW_HEIGHT) as usize)
+            .saturating_sub(2)
+            .max(1);
+        let mut items = self.rows.iter().filter(|row| row.more.is_none());
+        let target = match key {
+            Some(Key::Home) => items.next().map(|row| row.id),
+            Some(Key::End) => items.next_back().map(|row| row.id),
+            Some(Key::PageUp) => self.paged(*selected, |index| index.saturating_sub(page)),
+            Some(Key::PageDown) => self.paged(*selected, |index| index.saturating_add(page)),
+            _ => self.arrow_target(key, tree, root, *selected),
+        };
+        if let Some(target) = target {
+            *selected = Some(target);
+            self.scroll_to = Some((target, None));
+        }
+    }
+
+    /// The item `step` rows from the selected one (or from the top), kept within the list.
+    /// A "more" row there gives the item just above it.
+    fn paged(&self, selected: Option<NodeId>, step: impl Fn(usize) -> usize) -> Option<NodeId> {
+        let last = self.rows.len().checked_sub(1)?;
+        let from = selected.and_then(|id| self.row_of(id)).unwrap_or(0);
+        let index = step(from).min(last);
+        self.rows[..=index]
+            .iter()
+            .rev()
+            .find(|row| row.more.is_none())
+            .map(|row| row.id)
+    }
+
+    fn arrow_target(
+        &mut self,
+        key: Option<Key>,
+        tree: &Tree,
+        root: NodeId,
+        selected: Option<NodeId>,
+    ) -> Option<NodeId> {
+        let current = selected?;
+        let index = self.row_of(current)?;
         let is_folder = tree.node(current).has_children();
         let is_open = self.expanded.contains(&current);
-        let target = match key {
+        match key {
             Some(Key::ArrowUp) => self.rows[..index]
                 .iter()
                 .rev()
@@ -280,10 +327,6 @@ impl TreeView {
             }
             Some(Key::ArrowLeft) if current != root => tree.node(current).parent(),
             _ => None,
-        };
-        if let Some(target) = target {
-            *selected = Some(target);
-            self.scroll_to = Some((target, None));
         }
     }
 
@@ -343,30 +386,30 @@ impl TreeView {
     }
 }
 
-/// The row after a folder's first items. Returns whether it was clicked.
+/// The row after a folder's first items. Clicking the row or "Show N more" shows the
+/// next [`ROWS_PER_FOLDER`] items; "Show all" shows the rest.
 fn more_row(
     table_row: &mut egui_extras::TableRow<'_, '_>,
     depth: u16,
     hidden: usize,
     usage: Usage,
     parent_bytes: u64,
-) -> bool {
+) -> Option<ShowMore> {
     let fraction = fraction(usage.bytes, parent_bytes);
+    let mut clicked = None;
     table_row.col(|ui| {
         ui.add_space(f32::from(depth) * INDENT + INDENT + ui.spacing().item_spacing.x);
-        let shown = hidden.min(ROWS_PER_FOLDER);
-        ui.add(
-            Label::new(
-                egui::RichText::new(format!(
-                    "… {} more (click to show {})",
-                    format_count(hidden as u64),
-                    format_count(shown as u64)
-                ))
-                .italics(),
-            )
-            .selectable(false)
-            .truncate(),
-        );
+        let more = egui::RichText::new(format!("… {} more", format_count(hidden as u64)));
+        ui.add(Label::new(more.italics()).selectable(false));
+        if hidden > ROWS_PER_FOLDER {
+            let next = format!("Show {} more", format_count(ROWS_PER_FOLDER as u64));
+            if ui.link(next).clicked() {
+                clicked = Some(ShowMore::Next);
+            }
+        }
+        if ui.link("Show all").clicked() {
+            clicked = Some(ShowMore::All);
+        }
     });
     table_row.col(|ui| proportion_bar(ui, fraction));
     table_row.col(|ui| right_aligned(ui, format!("{:.1}%", fraction * 100.0)));
@@ -374,7 +417,10 @@ fn more_row(
     table_row.col(|ui| right_aligned(ui, format_usd(usage.monthly_cost)));
     table_row.col(|ui| right_aligned(ui, format_count(usage.objects)));
     table_row.col(|_| {});
-    table_row.response().clicked()
+    if clicked.is_none() && table_row.response().clicked() {
+        clicked = Some(ShowMore::Next);
+    }
+    clicked
 }
 
 fn node_icon(ui: &mut egui::Ui, tree: &Tree, id: NodeId, colors: &Colors) {
@@ -511,5 +557,35 @@ mod tests {
             Some(Tree::ROOT),
             "stays on the first row"
         );
+        assert_eq!(press(Key::End), Some(b), "goes to the last row");
+        assert_eq!(press(Key::Home), Some(Tree::ROOT), "goes to the first row");
+    }
+
+    #[test]
+    fn home_and_end_work_with_nothing_selected() {
+        let tree = tree_of(&[("a.bin", 10), ("b.bin", 3)]);
+        let b = tree
+            .find_child(Tree::ROOT, "b.bin", NodeKind::Object)
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut list = TreeView::default();
+        let mut selected = None;
+        frame(&ctx, &mut list, &tree, &mut selected, Some(Key::End));
+        assert_eq!(selected, Some(b));
+    }
+
+    #[test]
+    fn page_keys_stop_at_the_ends_of_the_list() {
+        let tree = tree_of(&[("a.bin", 10), ("b.bin", 3)]);
+        let b = tree
+            .find_child(Tree::ROOT, "b.bin", NodeKind::Object)
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut list = TreeView::default();
+        let mut selected = Some(Tree::ROOT);
+        frame(&ctx, &mut list, &tree, &mut selected, Some(Key::PageDown));
+        assert_eq!(selected, Some(b));
+        frame(&ctx, &mut list, &tree, &mut selected, Some(Key::PageUp));
+        assert_eq!(selected, Some(Tree::ROOT));
     }
 }

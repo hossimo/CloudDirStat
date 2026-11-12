@@ -1,0 +1,67 @@
+name: Winget
+
+# Publishing a full release (not a draft or pre-release), or turning a pre-release into a
+# full release, opens a pull request at microsoft/winget-pkgs that adds the new version.
+# Komac copies everything else (scopes, switches, descriptions) from the previous version.
+# Run it by hand to retry a release (for example if its installers weren't attached yet),
+# or with "dry run" to check the manifests without opening a pull request.
+#
+# Needs the WINGET_TOKEN secret: a classic GitHub token with the public_repo scope, from
+# the account that owns the winget-pkgs fork the pull request comes from.
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to submit (for example v1.2.5)"
+        required: true
+      dry-run:
+        description: "Only build and show the manifests"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  KOMAC_URL: https://github.com/russellbanks/Komac/releases/download/v2.16.0/komac-2.16.0-x86_64-unknown-linux-gnu.tar.gz
+  KOMAC_SHA256: 7d2707fa6210f2789a3702de49fbd150b736dbf426ee0b9bc8e098736f9fd82d
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find the installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          base="https://github.com/$GH_REPO/releases/download/$TAG"
+          for arch in x64 arm64; do
+            name="CloudDirStat-$TAG-windows-$arch-setup.exe"
+            if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$name"; then
+              echo "::error::$name isn't attached to $TAG yet. Run this workflow by hand once the Release workflow is done."
+              exit 1
+            fi
+            echo "$base/$name" >> urls.txt
+          done
+          cat urls.txt
+
+      - name: Install Komac
+        run: |
+          curl --fail --location --silent --show-error --output komac.tar.gz "$KOMAC_URL"
+          echo "$KOMAC_SHA256  komac.tar.gz" | sha256sum --check
+          tar -xzf komac.tar.gz komac
+
+      - name: Submit to winget
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          MODE: ${{ inputs.dry-run && '--dry-run' || '--submit' }}
+        run: |
+          ./komac update Downrighttech.CloudDirStat \
+            --version "${TAG#v}" \
+            --urls $(cat urls.txt) \
+            --release-notes-url "https://github.com/${{ github.repository }}/releases/tag/$TAG" \
+            "$MODE"
